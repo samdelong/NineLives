@@ -31,25 +31,43 @@ class FakeEventStreamResponse extends EventEmitter {
   }
 }
 
-test("extracts cat count and workflow event metadata", () => {
+test("extracts identified cat names and workflow event metadata", () => {
   assert.deepEqual(
     extractCatDetection({
       outputs: {
-        identified_cats: 2,
+        identified_cats: [
+          { name: "bobby", confidence: 0.98 },
+          { cat_name: "LUNA", confidence: 0.96 },
+        ],
         vision_events_event_id: ["event-42"],
-        vision_events_message: "Cats arrived for dinner.",
+        vision_events_message: "Bobby detected.",
       },
     }),
     {
       catCount: 2,
+      catNames: ["Bobby", "Luna"],
       detected: true,
       workflowEventId: "event-42",
-      message: "Cats arrived for dinner.",
+      message: "Bobby detected.",
     },
   );
 });
 
-test("falls back to raw prediction labels", () => {
+test("extracts cat names from strings and boolean maps", () => {
+  const encoded = extractCatDetection({
+    identified_cats: '["bobby", "Millie"]',
+  });
+  assert.deepEqual(encoded.catNames, ["Bobby", "Millie"]);
+  assert.equal(encoded.catCount, 2);
+
+  const mapped = extractCatDetection({
+    identified_cats: { bobby: true, luna: false },
+  });
+  assert.deepEqual(mapped.catNames, ["Bobby"]);
+  assert.equal(mapped.catCount, 1);
+});
+
+test("falls back to raw cat prediction labels", () => {
   const detection = extractCatDetection({
     raw_cat_predictions: [
       { class: "cat", confidence: 0.97 },
@@ -59,10 +77,11 @@ test("falls back to raw prediction labels", () => {
 
   assert.equal(detection.detected, true);
   assert.equal(detection.catCount, 1);
+  assert.deepEqual(detection.catNames, []);
 });
 
-test("persists entries and deduplicates workflow event IDs across restarts", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nine-lives-detections-"));
+test("records one entered and one left event per identified cat", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-transitions-"));
   const filePath = join(directory, "detections.jsonl");
   let now = new Date("2026-07-30T12:00:00.000Z");
 
@@ -70,78 +89,104 @@ test("persists entries and deduplicates workflow event IDs across restarts", asy
     const log = new DetectionLog({ filePath, now: () => now });
     await log.load();
 
-    const first = await log.recordFromInference(
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: [] }),
+      [],
+    );
+
+    const [bobbyEntered] = await log.recordFromInference(
       {
-        identified_cats: 1,
+        identified_cats: ["bobby"],
         vision_events_event_id: "event-one",
       },
       { frameId: "10" },
     );
-    const duplicate = await log.recordFromInference({
-      identified_cats: 1,
-      vision_events_event_id: "event-one",
-    });
+    assert.equal(bobbyEntered.message, "Bobby entered.");
+    assert.equal(bobbyEntered.event, "entered");
+    assert.equal(bobbyEntered.catName, "Bobby");
+    assert.equal(bobbyEntered.frameId, "10");
 
-    assert.equal(first.catCount, 1);
-    assert.equal(first.frameId, "10");
-    assert.equal(duplicate, null);
-    assert.equal(log.getStatus().total, 1);
-
-    const reloaded = new DetectionLog({ filePath, now: () => now });
-    await reloaded.load();
-    assert.equal(reloaded.getStatus().total, 1);
-    assert.equal(
-      await reloaded.recordFromInference({
-        identified_cats: 1,
-        vision_events_event_id: "event-one",
+    now = new Date("2026-07-30T12:00:01.000Z");
+    assert.deepEqual(
+      await log.recordFromInference({
+        identified_cats: ["bobby"],
+        vision_events_event_id: "event-two",
       }),
-      null,
+      [],
     );
 
-    now = new Date("2026-07-31T08:15:00.000Z");
-    await reloaded.recordFromInference({
-      identified_cats: 2,
-      vision_events_event_id: "event-two",
+    const [lunaEntered] = await log.recordFromInference({
+      identified_cats: ["bobby", "luna"],
     });
-    assert.equal(reloaded.getEntries().length, 2);
-    assert.equal(reloaded.getEntries()[0].workflowEventId, "event-two");
+    assert.equal(lunaEntered.message, "Luna entered.");
+
+    const [bobbyLeft] = await log.recordFromInference({
+      identified_cats: ["luna"],
+    });
+    assert.equal(bobbyLeft.message, "Bobby left.");
+
+    const [lunaLeft] = await log.recordFromInference({
+      identified_cats: [],
+    });
+    assert.equal(lunaLeft.message, "Luna left.");
+    assert.equal(log.getStatus().total, 4);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("deduplicates continuous detections without event IDs", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "nine-lives-fallback-"));
+test("restores current cat presence from persisted transitions", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-reload-"));
   const filePath = join(directory, "detections.jsonl");
-  let now = new Date("2026-07-30T12:00:00.000Z");
 
   try {
-    const log = new DetectionLog({
-      filePath,
-      now: () => now,
-      dedupeWindowMs: 5 * 60 * 1_000,
-    });
+    const firstLog = new DetectionLog({ filePath });
+    await firstLog.recordFromInference({ identified_cats: ["bobby"] });
 
-    assert.ok(await log.recordFromInference({ identified_cats: 1 }));
-    now = new Date("2026-07-30T12:01:00.000Z");
-    assert.equal(
-      await log.recordFromInference({ identified_cats: 1 }),
-      null,
+    const reloaded = new DetectionLog({ filePath });
+    await reloaded.load();
+    assert.deepEqual(
+      await reloaded.recordFromInference({ identified_cats: ["bobby"] }),
+      [],
     );
 
-    await log.recordFromInference({ identified_cats: 0 });
-    now = new Date("2026-07-30T12:02:00.000Z");
-    assert.ok(await log.recordFromInference({ identified_cats: 1 }));
-
-    now = new Date("2026-07-30T12:08:00.000Z");
-    assert.ok(await log.recordFromInference({ identified_cats: 1 }));
-    assert.equal(log.getStatus().total, 3);
+    const [left] = await reloaded.recordFromInference({
+      identified_cats: [],
+    });
+    assert.equal(left.message, "Bobby left.");
+    assert.equal(reloaded.getStatus().total, 2);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("streams new persisted detections to live clients", async () => {
+test("tracks anonymous cats by count when no identities are available", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-anonymous-"));
+  const filePath = join(directory, "detections.jsonl");
+
+  try {
+    const log = new DetectionLog({ filePath });
+    const entered = await log.recordFromInference({ identified_cats: 2 });
+    assert.deepEqual(
+      entered.map((entry) => entry.message),
+      ["A cat entered.", "A cat entered."],
+    );
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: 2 }),
+      [],
+    );
+
+    const oneLeft = await log.recordFromInference({ identified_cats: 1 });
+    assert.equal(oneLeft[0].message, "A cat left.");
+    const lastLeft = await log.recordFromInference({ identified_cats: 0 });
+    assert.equal(lastLeft[0].message, "A cat left.");
+    assert.equal(log.getStatus().total, 4);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("streams new persisted presence transitions to live clients", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nine-lives-stream-"));
   const filePath = join(directory, "detections.jsonl");
   const response = new FakeEventStreamResponse();
@@ -150,14 +195,17 @@ test("streams new persisted detections to live clients", async () => {
     const log = new DetectionLog({ filePath });
     log.openStream(response);
     await log.recordFromInference({
-      identified_cats: 1,
+      identified_cats: ["bobby"],
       vision_events_event_id: "live-event",
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.headers["Content-Type"], "text/event-stream; charset=utf-8");
+    assert.equal(
+      response.headers["Content-Type"],
+      "text/event-stream; charset=utf-8",
+    );
     assert.match(response.output, /event: detection/);
-    assert.match(response.output, /"workflowEventId":"live-event"/);
+    assert.match(response.output, /"message":"Bobby entered\."/);
 
     response.emit("close");
     log.stop();

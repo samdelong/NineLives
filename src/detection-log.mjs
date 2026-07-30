@@ -2,7 +2,45 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-const DEFAULT_DEDUPE_WINDOW_MS = 5 * 60 * 1_000;
+const NAME_KEYS = new Set([
+  "cat_name",
+  "catname",
+  "class",
+  "class_name",
+  "identity",
+  "label",
+  "name",
+]);
+
+const NAME_CONTAINER_KEYS = new Set([
+  "cats",
+  "cat_names",
+  "catnames",
+  "identified",
+  "identities",
+  "names",
+  "predictions",
+  "results",
+]);
+
+const NON_NAME_KEYS = new Set([
+  "box",
+  "class_id",
+  "confidence",
+  "count",
+  "height",
+  "id",
+  "number_of_cats",
+  "points",
+  "score",
+  "width",
+  "x",
+  "y",
+]);
+
+const ABSENT_NAME_VALUES =
+  /^(?:0|false|n\/a|no|no cats?|none|null|unknown|unidentified)$/i;
+const GENERIC_CAT_VALUES = /^(?:a |the )?cats?$/i;
 
 function findValuesByKey(value, targetKey, matches = []) {
   if (Array.isArray(value)) {
@@ -37,6 +75,119 @@ function firstScalar(value) {
     }
   }
   return null;
+}
+
+function titleCaseName(value) {
+  if (value !== value.toLowerCase() && value !== value.toUpperCase()) {
+    return value;
+  }
+  return value
+    .toLowerCase()
+    .replace(/(^|[\s'-])([\p{L}\p{N}])/gu, (_, prefix, character) =>
+      `${prefix}${character.toUpperCase()}`,
+    );
+}
+
+function normalizeCatName(value) {
+  if (typeof value !== "string") return null;
+
+  let name = value
+    .trim()
+    .replace(/^[-*•]\s*/, "")
+    .replace(/^(?:cat(?:\s+name)?|identity|name)\s*[:=-]\s*/i, "")
+    .replace(
+      /\s+(?:has\s+)?(?:arrived|departed|detected|entered|left|present|visible)$/i,
+      "",
+    )
+    .replace(/\s+is\s+(?:in (?:the )?frame|present|visible)$/i, "")
+    .replace(/\s+(?:in|inside) (?:the )?frame$/i, "")
+    .replace(/^["']|["'.]$/g, "")
+    .trim();
+
+  if (
+    !name ||
+    name.length > 48 ||
+    name.split(/\s+/).length > 4 ||
+    ABSENT_NAME_VALUES.test(name) ||
+    GENERIC_CAT_VALUES.test(name) ||
+    /^\d+(?:\.\d+)?$/.test(name)
+  ) {
+    return null;
+  }
+
+  return titleCaseName(name);
+}
+
+function addCatName(names, value) {
+  const name = normalizeCatName(value);
+  if (name) names.set(name.toLocaleLowerCase(), name);
+}
+
+function collectNamesFromString(value, names) {
+  const text = value.trim();
+  if (!text || ABSENT_NAME_VALUES.test(text)) return;
+
+  if (
+    (text.startsWith("[") && text.endsWith("]")) ||
+    (text.startsWith("{") && text.endsWith("}"))
+  ) {
+    try {
+      collectCatNames(JSON.parse(text), names);
+      return;
+    } catch {
+      // Treat non-JSON strings as ordinary Workflow output below.
+    }
+  }
+
+  const parts = text
+    .split(/\s*(?:,|;|\band\b|\n)\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  for (const part of parts) addCatName(names, part);
+}
+
+function collectCatNames(value, names = new Map(), depth = 0) {
+  if (depth > 8 || value === null || value === undefined) return names;
+
+  if (typeof value === "string") {
+    collectNamesFromString(value, names);
+    return names;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectCatNames(item, names, depth + 1);
+    return names;
+  }
+  if (typeof value !== "object") return names;
+
+  let foundStructuredField = false;
+  for (const [key, child] of Object.entries(value)) {
+    const normalizedKey = key.toLowerCase();
+    if (NAME_KEYS.has(normalizedKey)) {
+      foundStructuredField = true;
+      if (typeof child === "string") collectNamesFromString(child, names);
+      continue;
+    }
+    if (NAME_CONTAINER_KEYS.has(normalizedKey)) {
+      foundStructuredField = true;
+      collectCatNames(child, names, depth + 1);
+    }
+  }
+
+  if (!foundStructuredField) {
+    for (const [key, child] of Object.entries(value)) {
+      const normalizedKey = key.toLowerCase();
+      if (
+        NON_NAME_KEYS.has(normalizedKey) ||
+        NAME_KEYS.has(normalizedKey) ||
+        NAME_CONTAINER_KEYS.has(normalizedKey)
+      ) {
+        continue;
+      }
+      if (child === true) addCatName(names, key);
+    }
+  }
+
+  return names;
 }
 
 function countIdentifiedCats(value) {
@@ -78,13 +229,28 @@ function countPredictionCats(predictions) {
   }).length;
 }
 
+function nameFromEventMessage(message) {
+  if (typeof message !== "string") return null;
+  const match = message
+    .trim()
+    .match(
+      /^(.{1,48}?)\s+(?:has\s+)?(?:arrived|departed|detected|entered|left|is present|is visible)\b/i,
+    );
+  return match ? normalizeCatName(match[1]) : null;
+}
+
 export function extractCatDetection(data) {
   const identifiedValues = findValuesByKey(data, "identified_cats");
+  const names = new Map();
   let catCount = null;
+
   for (const value of identifiedValues) {
+    collectCatNames(value, names);
     const count = countIdentifiedCats(value);
     if (count !== null) catCount = Math.max(catCount ?? 0, count);
   }
+
+  if (names.size > 0) catCount = Math.max(catCount ?? 0, names.size);
 
   if (catCount === null) {
     const predictionValues = findValuesByKey(data, "raw_cat_predictions");
@@ -100,9 +266,15 @@ export function extractCatDetection(data) {
   const message = firstScalar(
     findValuesByKey(data, "vision_events_message"),
   );
+  const messageName = nameFromEventMessage(message);
+  if (messageName && catCount > 0) {
+    names.set(messageName.toLocaleLowerCase(), messageName);
+    catCount = Math.max(catCount, names.size);
+  }
 
   return {
     catCount,
+    catNames: [...names.values()],
     detected: catCount > 0,
     workflowEventId,
     message,
@@ -115,7 +287,13 @@ function isStoredEntry(value) {
     typeof value === "object" &&
     typeof value.id === "string" &&
     typeof value.detectedAt === "string" &&
-    Number.isFinite(value.catCount)
+    Number.isFinite(value.catCount) &&
+    (value.event === undefined ||
+      value.event === "entered" ||
+      value.event === "left") &&
+    (value.catName === undefined ||
+      value.catName === null ||
+      typeof value.catName === "string")
   );
 }
 
@@ -123,22 +301,19 @@ function writeEvent(response, entry) {
   response.write(`event: detection\ndata: ${JSON.stringify(entry)}\n\n`);
 }
 
+function transitionMessage(catName, event) {
+  return `${catName || "A cat"} ${event}.`;
+}
+
 export class DetectionLog {
-  constructor({
-    filePath,
-    now = () => new Date(),
-    dedupeWindowMs = DEFAULT_DEDUPE_WINDOW_MS,
-    logger = console,
-  }) {
+  constructor({ filePath, now = () => new Date(), logger = console }) {
     this.filePath = filePath;
     this.now = now;
-    this.dedupeWindowMs = dedupeWindowMs;
     this.logger = logger;
 
     this.entries = [];
-    this.seenEventIds = new Set();
-    this.currentlyDetected = false;
-    this.lastFallbackDetectionAt = null;
+    this.presentCats = new Map();
+    this.presentAnonymousCount = 0;
     this.clients = new Set();
     this.writeQueue = Promise.resolve();
   }
@@ -166,11 +341,8 @@ export class DetectionLog {
         invalidLines += 1;
         return [];
       });
-    this.seenEventIds = new Set(
-      this.entries
-        .map((entry) => entry.workflowEventId)
-        .filter((eventId) => typeof eventId === "string" && eventId),
-    );
+
+    this.restorePresenceState();
 
     if (invalidLines > 0) {
       this.logger.warn(
@@ -182,48 +354,111 @@ export class DetectionLog {
     return this.getStatus();
   }
 
+  restorePresenceState() {
+    this.presentCats.clear();
+    this.presentAnonymousCount = 0;
+
+    for (const entry of this.entries) {
+      if (!entry.event) continue;
+      if (entry.catName) {
+        const key = entry.catName.toLocaleLowerCase();
+        if (entry.event === "entered") {
+          this.presentCats.set(key, entry.catName);
+        } else {
+          this.presentCats.delete(key);
+        }
+      } else if (entry.event === "entered") {
+        this.presentAnonymousCount += 1;
+      } else {
+        this.presentAnonymousCount = Math.max(
+          0,
+          this.presentAnonymousCount - 1,
+        );
+      }
+    }
+  }
+
   async recordFromInference(data, { frameId = null } = {}) {
     const detection = extractCatDetection(data);
-    if (!detection.detected) {
-      this.currentlyDetected = false;
-      return null;
-    }
+    const occurredAt = this.now();
+    const transitions = [];
 
-    const detectedAt = this.now();
-    if (detection.workflowEventId) {
-      if (this.seenEventIds.has(detection.workflowEventId)) return null;
-      this.seenEventIds.add(detection.workflowEventId);
-    } else {
-      const withinDedupeWindow =
-        this.lastFallbackDetectionAt &&
-        detectedAt.getTime() - this.lastFallbackDetectionAt.getTime() <
-          this.dedupeWindowMs;
-      if (this.currentlyDetected && withinDedupeWindow) return null;
-      this.lastFallbackDetectionAt = detectedAt;
-    }
-    this.currentlyDetected = true;
+    if (detection.catNames.length > 0) {
+      const nextCats = new Map(
+        detection.catNames.map((name) => [name.toLocaleLowerCase(), name]),
+      );
+      const anonymousMatches = Math.min(
+        this.presentAnonymousCount,
+        nextCats.size,
+      );
+      let matchedAnonymous = 0;
 
-    const entry = {
-      id: randomUUID(),
-      detectedAt: detectedAt.toISOString(),
-      catCount: detection.catCount,
-      message: detection.message,
-      workflowEventId: detection.workflowEventId,
-      frameId: frameId === null ? null : String(frameId),
-    };
-
-    try {
-      await this.persist(entry);
-    } catch (error) {
-      if (entry.workflowEventId) {
-        this.seenEventIds.delete(entry.workflowEventId);
+      for (const [key, name] of nextCats) {
+        if (this.presentCats.has(key)) continue;
+        if (matchedAnonymous < anonymousMatches) {
+          matchedAnonymous += 1;
+          continue;
+        }
+        transitions.push({ catName: name, event: "entered" });
       }
-      throw error;
+      for (const [key, name] of this.presentCats) {
+        if (!nextCats.has(key)) {
+          transitions.push({ catName: name, event: "left" });
+        }
+      }
+
+      this.presentCats = nextCats;
+      this.presentAnonymousCount = 0;
+    } else if (!detection.detected) {
+      for (const name of this.presentCats.values()) {
+        transitions.push({ catName: name, event: "left" });
+      }
+      for (let index = 0; index < this.presentAnonymousCount; index += 1) {
+        transitions.push({ catName: null, event: "left" });
+      }
+      this.presentCats.clear();
+      this.presentAnonymousCount = 0;
+    } else if (this.presentCats.size === 0) {
+      const entered = Math.max(
+        0,
+        detection.catCount - this.presentAnonymousCount,
+      );
+      const left = Math.max(
+        0,
+        this.presentAnonymousCount - detection.catCount,
+      );
+      for (let index = 0; index < entered; index += 1) {
+        transitions.push({ catName: null, event: "entered" });
+      }
+      for (let index = 0; index < left; index += 1) {
+        transitions.push({ catName: null, event: "left" });
+      }
+      this.presentAnonymousCount = detection.catCount;
     }
 
-    this.entries.push(entry);
-    this.broadcast(entry);
-    return entry;
+    const entries = [];
+    for (const transition of transitions) {
+      const entry = {
+        id: randomUUID(),
+        detectedAt: occurredAt.toISOString(),
+        event: transition.event,
+        catName: transition.catName,
+        catCount: detection.catCount,
+        message: transitionMessage(
+          transition.catName,
+          transition.event,
+        ),
+        workflowMessage: detection.message,
+        workflowEventId: detection.workflowEventId,
+        frameId: frameId === null ? null : String(frameId),
+      };
+      await this.persist(entry);
+      this.entries.push(entry);
+      this.broadcast(entry);
+      entries.push(entry);
+    }
+
+    return entries;
   }
 
   async persist(entry) {
@@ -281,6 +516,7 @@ export class DetectionLog {
     return {
       total: this.entries.length,
       latestDetectionAt: latest?.detectedAt ?? null,
+      latestEventAt: latest?.detectedAt ?? null,
     };
   }
 

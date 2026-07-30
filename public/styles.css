@@ -879,6 +879,15 @@ h1 {
   box-shadow: 0 0 0 3px rgba(239, 113, 79, 0.12);
 }
 
+.detection-log-entry--left .detection-log-dot {
+  background: #aaa69d;
+  box-shadow: 0 0 0 3px rgba(170, 166, 157, 0.14);
+}
+
+.detection-log-entry--left .detection-log-title {
+  color: var(--muted);
+}
+
 .detection-log-title,
 .detection-log-time,
 .detection-log-message {

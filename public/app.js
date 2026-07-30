@@ -231,13 +231,13 @@ function renderDetectionLog() {
   elements.detectionLog.replaceChildren();
   elements.detectionLogCount.textContent =
     `${detectionLogTotal.toLocaleString()} ${
-      detectionLogTotal === 1 ? "detection" : "detections"
+      detectionLogTotal === 1 ? "event" : "events"
     }`;
 
   if (detectionEntries.length === 0) {
     const empty = document.createElement("p");
     empty.className = "detection-log-empty";
-    empty.textContent = "No cat detections saved yet.";
+    empty.textContent = "No cat activity saved yet.";
     elements.detectionLog.append(empty);
     return;
   }
@@ -255,6 +255,9 @@ function renderDetectionLog() {
 
     const row = document.createElement("article");
     row.className = "detection-log-entry";
+    if (entry.event === "left") {
+      row.classList.add("detection-log-entry--left");
+    }
 
     const dot = document.createElement("span");
     dot.className = "detection-log-dot";
@@ -263,19 +266,26 @@ function renderDetectionLog() {
     const body = document.createElement("div");
     const title = document.createElement("p");
     title.className = "detection-log-title";
-    title.textContent = `${entry.catCount} ${
-      entry.catCount === 1 ? "cat" : "cats"
-    } detected`;
+    title.textContent =
+      entry.event === "entered" || entry.event === "left"
+        ? entry.message ||
+          `${entry.catName || "A cat"} ${entry.event}.`
+        : `${entry.catCount} ${
+            entry.catCount === 1 ? "cat" : "cats"
+          } detected`;
 
     const detail = document.createElement("p");
     detail.className = "detection-log-time";
     detail.textContent = detectionTimeLabel(entry.detectedAt);
     body.append(title, detail);
 
-    if (entry.message) {
+    const supportingMessage =
+      entry.workflowMessage ||
+      (entry.event ? null : entry.message);
+    if (supportingMessage) {
       const message = document.createElement("p");
       message.className = "detection-log-message";
-      message.textContent = String(entry.message).slice(0, 180);
+      message.textContent = String(supportingMessage).slice(0, 180);
       body.append(message);
     }
 

@@ -171,11 +171,6 @@ export function createConfig(env = process.env) {
         ROOT_DIR,
         env.DETECTION_LOG_FILE || "data/detection-log.jsonl",
       ),
-      dedupeWindowMs:
-        integerFromEnv(env.DETECTION_LOG_DEDUPE_SECONDS, 300, {
-          min: 1,
-          max: 86_400,
-        }) * 1_000,
     },
   };
 }
@@ -502,7 +497,6 @@ export async function startApplication() {
   });
   const detectionLog = new DetectionLog({
     filePath: config.detectionLog.filePath,
-    dedupeWindowMs: config.detectionLog.dedupeWindowMs,
   });
   await Promise.all([inferenceSchedule.load(), detectionLog.load()]);
   const server = createMonitorServer({
