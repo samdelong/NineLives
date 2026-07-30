@@ -1,0 +1,32 @@
+/node_modules/
+/.venv/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/coverage/
+
+.DS_Store
+*.pem
+*.log
+*.pid
+*.tmp
+npm-debug.log*
+
+.env*
+!.env.example
+
+# Generated application and deployment output
+/dist/
+/.vinext/
+/.wrangler/
+/.openai/
+*.tsbuildinfo
+
+# Local runtime state
+/data/
+/outputs/
+/work/
+
+# Local editor settings
+/.idea/
+/.vscode/

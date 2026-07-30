@@ -1,0 +1,1 @@
+inference-sdk[webrtc]==1.3.7

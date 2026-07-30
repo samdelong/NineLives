@@ -1,0 +1,17 @@
+{
+  "name": "nine-lives-cat-camera",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Raspberry Pi camera stream with continuous cat inference",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node --watch server.mjs",
+    "setup:python": "python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+    "check": "node --check server.mjs && node --check src/camera-publisher.mjs && node --check src/detection-log.mjs && node --check src/inference-publisher.mjs && node --check src/inference-schedule.mjs && node --check src/inference-worker.mjs && node --check public/app.js && node --check public/schedule.js && node --check tests/fixtures/mock-inference-worker.mjs && python3 -c \"import ast,pathlib; ast.parse(pathlib.Path('inference_stream.py').read_text())\"",
+    "test": "node --test"
+  },
+  "type": "module"
+}

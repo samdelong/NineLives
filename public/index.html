@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="View continuously annotated cat detections from a Raspberry Pi camera."
+    />
+    <meta property="og:title" content="Nine Lives — Cat Camera Monitor" />
+    <meta
+      property="og:description"
+      content="View continuously annotated cat detections from a Raspberry Pi camera."
+    />
+    <meta property="og:image" content="/og.png" />
+    <title>Nine Lives — Cat Camera Monitor</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">9</span>
+          <div>
+            <p class="brand-name">Nine Lives</p>
+            <p class="brand-subtitle">Pi camera monitor</p>
+          </div>
+        </div>
+
+        <div
+          id="cameraBadge"
+          class="camera-badge camera-badge--requesting"
+          aria-live="polite"
+        >
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="cameraBadgeLabel">Connecting to Pi</span>
+        </div>
+      </header>
+
+      <section class="workspace" aria-label="Cat camera monitor">
+        <div class="camera-column">
+          <div class="section-heading">
+            <div>
+              <p class="kicker">Live workflow output</p>
+              <h1>Nine Lives Realtime Detection</h1>
+            </div>
+          </div>
+
+          <div class="camera-card">
+            <div class="camera-stage">
+              <img
+                id="cameraFeed"
+                class="camera-feed"
+                src="/api/stream"
+                alt="Live annotated inference stream from the Raspberry Pi camera"
+              />
+              <div class="frame-corner frame-corner--one"></div>
+              <div class="frame-corner frame-corner--two"></div>
+              <div class="frame-corner frame-corner--three"></div>
+              <div class="frame-corner frame-corner--four"></div>
+
+              <div id="cameraCover" class="camera-cover" role="status">
+                <span class="loader" aria-hidden="true"></span>
+                <p id="cameraCoverMessage">
+                  Waiting for the first frame from the Pi camera…
+                </p>
+                <button
+                  id="restartCameraButton"
+                  type="button"
+                  class="secondary-button"
+                  hidden
+                >
+                  Restart camera process
+                </button>
+              </div>
+
+              <div id="liveChip" class="live-chip" aria-hidden="true">
+                <span></span>
+                Live inference
+              </div>
+            </div>
+            <div class="camera-meta">
+              <span id="cameraSource">rpicam-vid</span>
+              <span class="secure-label">
+                Annotated by the local workflow
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <aside class="control-panel" aria-label="Inference controls and status">
+          <div class="panel-top">
+            <p class="kicker">Server-side inference</p>
+            <h2>On your schedule</h2>
+            <p class="panel-copy">
+              Keep the camera live, then run the inference workflow only around
+              the times your cats are fed.
+            </p>
+
+            <div
+              id="inferenceStatus"
+              class="continuous-status continuous-status--waiting"
+              role="status"
+            >
+              <span class="status-dot" aria-hidden="true"></span>
+              <span id="inferenceStatusLabel">Waiting for first result</span>
+            </div>
+          </div>
+
+          <section class="schedule-section" aria-labelledby="scheduleTitle">
+            <div class="schedule-heading">
+              <div>
+                <p class="schedule-kicker">Daily schedule</p>
+                <h3 id="scheduleTitle">Inference windows</h3>
+              </div>
+              <label class="schedule-toggle">
+                <input id="scheduleEnabled" type="checkbox" />
+                <span class="schedule-toggle-track" aria-hidden="true"></span>
+                <span>Enabled</span>
+              </label>
+            </div>
+
+            <p id="scheduleSummary" class="schedule-summary">
+              Loading the Raspberry Pi schedule…
+            </p>
+            <div
+              id="scheduleWindows"
+              class="schedule-windows"
+              aria-label="Daily inference time windows"
+            ></div>
+            <button
+              id="scheduleAddButton"
+              class="schedule-add-button"
+              type="button"
+            >
+              + Add exact time window
+            </button>
+            <p class="schedule-help">
+              Times are precise to the minute. An end before its start runs
+              overnight.
+            </p>
+
+            <div class="schedule-presets" aria-label="Schedule presets">
+              <button id="scheduleMorningButton" type="button">+ Morning</button>
+              <button id="scheduleEveningButton" type="button">+ Evening</button>
+              <button id="scheduleClearButton" type="button">Clear</button>
+            </div>
+
+            <div class="schedule-actions">
+              <span id="scheduleFeedback" role="status"></span>
+              <button id="saveScheduleButton" type="button">
+                Save schedule
+              </button>
+            </div>
+          </section>
+
+          <section
+            class="detection-log-section"
+            aria-labelledby="detectionLogTitle"
+          >
+            <div class="detection-log-heading">
+              <div>
+                <p class="schedule-kicker">Persistent history</p>
+                <h3 id="detectionLogTitle">Detection log</h3>
+              </div>
+              <span
+                id="detectionLogConnection"
+                class="detection-log-connection"
+              >
+                Connecting
+              </span>
+            </div>
+            <p class="detection-log-copy">
+              Cat events are saved on this server and update here live.
+            </p>
+            <div class="detection-log-meta">
+              <span id="detectionLogCount">0 detections</span>
+            </div>
+            <div
+              id="detectionLog"
+              class="detection-log"
+              role="log"
+              aria-live="polite"
+              aria-label="Saved cat detections"
+            >
+              <p class="detection-log-empty">Loading saved detections…</p>
+            </div>
+          </section>
+
+          <div class="result-region" aria-live="polite">
+            <div id="emptyResult" class="empty-result">
+              <span class="result-index">01</span>
+              <div>
+                <p class="empty-title">Continuous inference is starting</p>
+                <p>The latest workflow result will appear here.</p>
+              </div>
+            </div>
+
+            <div id="runningResult" class="running-result" role="status" hidden>
+              <span class="scan-line" aria-hidden="true"></span>
+              <p id="runningTitle">Starting continuous inference</p>
+              <span id="runningDetail"
+                >Waiting for the first annotated workflow frame</span
+              >
+            </div>
+
+            <div id="errorResult" class="error-result" role="alert" hidden>
+              <p>Inference unavailable</p>
+              <span id="errorMessage"></span>
+            </div>
+
+            <div id="successResult" class="success-result" hidden>
+              <div class="result-heading">
+                <div>
+                  <p id="resultEyebrow" class="result-eyebrow"></p>
+                  <h3 id="resultHeadline"></h3>
+                </div>
+                <span id="resultCheck" class="result-check" aria-hidden="true"></span>
+              </div>
+              <p id="resultDetail" class="result-detail"></p>
+              <p id="resultTimestamp" class="timestamp"></p>
+              <details>
+                <summary>View raw workflow response</summary>
+                <pre id="rawResult"></pre>
+              </details>
+            </div>
+          </div>
+
+        </aside>
+      </section>
+    </main>
+  </body>
+</html>
