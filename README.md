@@ -139,3 +139,14 @@ the same WebRTC worker and browser endpoints.
 - `PUT /api/schedule` — save the daily inference schedule
 - `GET /api/inference/latest` — latest workflow prediction data
 - `POST /api/camera/restart` — restart the camera process
+
+## License
+
+The Nine Lives source code is licensed under the
+[Apache License 2.0](LICENSE).
+
+Roboflow software, hosted services, workflows, datasets, models, and model
+weights are not licensed by this repository. They remain subject to their own
+licenses and terms. This project does not redistribute model weights; users
+must supply and verify the rights to any models, datasets, and workflows they
+configure.
