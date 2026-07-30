@@ -4,6 +4,12 @@ A Node.js service for a Raspberry Pi camera. The server starts `rpicam-vid`,
 publishes its raw MJPEG feed locally, supervises a Python WebRTC worker, and
 publishes the workflow's annotated video output to the browser.
 
+## Roboflow Workflow
+
+[Explore the cat-monitoring Workflow in Roboflow](https://app.roboflow.com/workflows/embed/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ3b3JrZmxvd0lkIjoieWZGWVQ5cFlMWUJFbDE3NmdnVnEiLCJ3b3Jrc3BhY2VJZCI6InNsMDEyQUFpS1BZUEZ0OEFaeGg0MlZqYWF2MDIiLCJ1c2VySWQiOiJzbDAxMkFBaUtQWVBGdDhBWnhoNDJWamFhdjAyIiwiaWF0IjoxNzg1NDQ0NjEzfQ.LuQyUvGFHV6D84Hk8Uab4kT2qIMpASvwqgmMiW6w2GY)
+to inspect the visual inference pipeline that identifies cats, produces the
+annotated stream, and emits the events recorded by this application.
+
 ## Architecture
 
 ```text
