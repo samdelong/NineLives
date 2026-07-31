@@ -171,6 +171,10 @@ export function createConfig(env = process.env) {
         ROOT_DIR,
         env.DETECTION_LOG_FILE || "data/detection-log.jsonl",
       ),
+      cooldownMs: integerFromEnv(env.DETECTION_LOG_COOLDOWN_MS, 1_000, {
+        min: 0,
+        max: 60_000,
+      }),
     },
   };
 }
@@ -497,6 +501,7 @@ export async function startApplication() {
   });
   const detectionLog = new DetectionLog({
     filePath: config.detectionLog.filePath,
+    cooldownMs: config.detectionLog.cooldownMs,
   });
   await Promise.all([inferenceSchedule.load(), detectionLog.load()]);
   const server = createMonitorServer({

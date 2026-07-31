@@ -120,11 +120,23 @@ test("records one entered and one left event per identified cat", async () => {
     });
     assert.equal(lunaEntered.message, "Luna entered.");
 
+    now = new Date("2026-07-30T12:00:02.000Z");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: ["luna"] }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:03.000Z");
     const [bobbyLeft] = await log.recordFromInference({
       identified_cats: ["luna"],
     });
     assert.equal(bobbyLeft.message, "Bobby left.");
 
+    now = new Date("2026-07-30T12:00:04.000Z");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: [] }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:05.000Z");
     const [lunaLeft] = await log.recordFromInference({
       identified_cats: [],
     });
@@ -138,21 +150,25 @@ test("records one entered and one left event per identified cat", async () => {
 test("restores current cat presence from persisted transitions", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nine-lives-reload-"));
   const filePath = join(directory, "detections.jsonl");
+  let now = new Date("2026-07-30T12:00:00.000Z");
 
   try {
-    const firstLog = new DetectionLog({ filePath });
+    const firstLog = new DetectionLog({ filePath, now: () => now });
     await firstLog.recordFromInference({ identified_cats: ["bobby"] });
 
-    const reloaded = new DetectionLog({ filePath });
+    const reloaded = new DetectionLog({ filePath, now: () => now });
     await reloaded.load();
     assert.deepEqual(
       await reloaded.recordFromInference({ identified_cats: ["bobby"] }),
       [],
     );
 
-    const [left] = await reloaded.recordFromInference({
-      identified_cats: [],
-    });
+    assert.deepEqual(
+      await reloaded.recordFromInference({ identified_cats: [] }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:01.000Z");
+    const [left] = await reloaded.recordFromInference({ identified_cats: [] });
     assert.equal(left.message, "Bobby left.");
     assert.equal(reloaded.getStatus().total, 2);
   } finally {
@@ -163,9 +179,10 @@ test("restores current cat presence from persisted transitions", async () => {
 test("tracks anonymous cats by count when no identities are available", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nine-lives-anonymous-"));
   const filePath = join(directory, "detections.jsonl");
+  let now = new Date("2026-07-30T12:00:00.000Z");
 
   try {
-    const log = new DetectionLog({ filePath });
+    const log = new DetectionLog({ filePath, now: () => now });
     const entered = await log.recordFromInference({ identified_cats: 2 });
     assert.deepEqual(
       entered.map((entry) => entry.message),
@@ -176,11 +193,61 @@ test("tracks anonymous cats by count when no identities are available", async ()
       [],
     );
 
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: 1 }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:01.000Z");
     const oneLeft = await log.recordFromInference({ identified_cats: 1 });
     assert.equal(oneLeft[0].message, "A cat left.");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: 0 }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:02.000Z");
     const lastLeft = await log.recordFromInference({ identified_cats: 0 });
     assert.equal(lastLeft[0].message, "A cat left.");
     assert.equal(log.getStatus().total, 4);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("cancels a pending exit when detection flickers for less than one second", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-cooldown-"));
+  const filePath = join(directory, "detections.jsonl");
+  let now = new Date("2026-07-30T12:00:00.000Z");
+
+  try {
+    const log = new DetectionLog({ filePath, now: () => now });
+    const [entered] = await log.recordFromInference({
+      identified_cats: ["bobby"],
+    });
+    assert.equal(entered.message, "Bobby entered.");
+
+    for (let index = 1; index <= 9; index += 1) {
+      now = new Date(`2026-07-30T12:00:00.${index}00Z`);
+      assert.deepEqual(
+        await log.recordFromInference({ identified_cats: [] }),
+        [],
+      );
+      now = new Date(`2026-07-30T12:00:00.${index}50Z`);
+      assert.deepEqual(
+        await log.recordFromInference({ identified_cats: ["bobby"] }),
+        [],
+      );
+    }
+
+    assert.equal(log.getStatus().total, 1);
+    now = new Date("2026-07-30T12:00:02.000Z");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: [] }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:03.000Z");
+    const [left] = await log.recordFromInference({ identified_cats: [] });
+    assert.equal(left.message, "Bobby left.");
+    assert.equal(log.getStatus().total, 2);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

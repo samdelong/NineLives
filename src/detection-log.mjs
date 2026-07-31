@@ -41,6 +41,7 @@ const NON_NAME_KEYS = new Set([
 const ABSENT_NAME_VALUES =
   /^(?:0|false|n\/a|no|no cats?|none|null|unknown|unidentified)$/i;
 const GENERIC_CAT_VALUES = /^(?:a |the )?cats?$/i;
+const DEFAULT_LOG_COOLDOWN_MS = 1_000;
 
 function findValuesByKey(value, targetKey, matches = []) {
   if (Array.isArray(value)) {
@@ -306,14 +307,22 @@ function transitionMessage(catName, event) {
 }
 
 export class DetectionLog {
-  constructor({ filePath, now = () => new Date(), logger = console }) {
+  constructor({
+    filePath,
+    now = () => new Date(),
+    cooldownMs = DEFAULT_LOG_COOLDOWN_MS,
+    logger = console,
+  }) {
     this.filePath = filePath;
     this.now = now;
+    this.cooldownMs = Math.max(0, cooldownMs);
     this.logger = logger;
 
     this.entries = [];
     this.presentCats = new Map();
     this.presentAnonymousCount = 0;
+    this.pendingDepartures = new Map();
+    this.pendingAnonymousDeparture = null;
     this.clients = new Set();
     this.writeQueue = Promise.resolve();
   }
@@ -357,6 +366,8 @@ export class DetectionLog {
   restorePresenceState() {
     this.presentCats.clear();
     this.presentAnonymousCount = 0;
+    this.pendingDepartures.clear();
+    this.pendingAnonymousDeparture = null;
 
     for (const entry of this.entries) {
       if (!entry.event) continue;
@@ -378,6 +389,76 @@ export class DetectionLog {
     }
   }
 
+  markNamedCatMissing(key, name, occurredAt, transitions) {
+    const missingSince = this.pendingDepartures.get(key);
+    if (!missingSince) {
+      if (this.cooldownMs === 0) {
+        transitions.push({ catName: name, event: "left" });
+        this.presentCats.delete(key);
+      } else {
+        this.pendingDepartures.set(key, occurredAt);
+      }
+      return;
+    }
+
+    if (occurredAt.getTime() - missingSince.getTime() < this.cooldownMs) {
+      return;
+    }
+
+    transitions.push({ catName: name, event: "left" });
+    this.pendingDepartures.delete(key);
+    this.presentCats.delete(key);
+  }
+
+  reconcileAnonymousCount(nextCount, occurredAt, transitions) {
+    if (nextCount >= this.presentAnonymousCount) {
+      this.pendingAnonymousDeparture = null;
+      for (
+        let index = this.presentAnonymousCount;
+        index < nextCount;
+        index += 1
+      ) {
+        transitions.push({ catName: null, event: "entered" });
+      }
+      this.presentAnonymousCount = nextCount;
+      return;
+    }
+
+    if (this.cooldownMs === 0) {
+      for (let index = nextCount; index < this.presentAnonymousCount; index += 1) {
+        transitions.push({ catName: null, event: "left" });
+      }
+      this.presentAnonymousCount = nextCount;
+      this.pendingAnonymousDeparture = null;
+      return;
+    }
+
+    if (
+      !this.pendingAnonymousDeparture ||
+      this.pendingAnonymousDeparture.count !== nextCount
+    ) {
+      this.pendingAnonymousDeparture = {
+        count: nextCount,
+        since: occurredAt,
+      };
+      return;
+    }
+
+    if (
+      occurredAt.getTime() -
+        this.pendingAnonymousDeparture.since.getTime() <
+      this.cooldownMs
+    ) {
+      return;
+    }
+
+    for (let index = nextCount; index < this.presentAnonymousCount; index += 1) {
+      transitions.push({ catName: null, event: "left" });
+    }
+    this.presentAnonymousCount = nextCount;
+    this.pendingAnonymousDeparture = null;
+  }
+
   async recordFromInference(data, { frameId = null } = {}) {
     const detection = extractCatDetection(data);
     const occurredAt = this.now();
@@ -394,46 +475,40 @@ export class DetectionLog {
       let matchedAnonymous = 0;
 
       for (const [key, name] of nextCats) {
+        this.pendingDepartures.delete(key);
         if (this.presentCats.has(key)) continue;
         if (matchedAnonymous < anonymousMatches) {
           matchedAnonymous += 1;
-          continue;
+        } else {
+          transitions.push({ catName: name, event: "entered" });
         }
-        transitions.push({ catName: name, event: "entered" });
+        this.presentCats.set(key, name);
       }
       for (const [key, name] of this.presentCats) {
         if (!nextCats.has(key)) {
-          transitions.push({ catName: name, event: "left" });
+          this.markNamedCatMissing(key, name, occurredAt, transitions);
         }
       }
 
-      this.presentCats = nextCats;
-      this.presentAnonymousCount = 0;
+      this.presentAnonymousCount -= matchedAnonymous;
+      this.reconcileAnonymousCount(0, occurredAt, transitions);
     } else if (!detection.detected) {
-      for (const name of this.presentCats.values()) {
-        transitions.push({ catName: name, event: "left" });
+      for (const [key, name] of this.presentCats) {
+        this.markNamedCatMissing(key, name, occurredAt, transitions);
       }
-      for (let index = 0; index < this.presentAnonymousCount; index += 1) {
-        transitions.push({ catName: null, event: "left" });
+      this.reconcileAnonymousCount(0, occurredAt, transitions);
+    } else {
+      // A positive count without identities is often a transient Workflow
+      // fallback. Keep known cats present so an identity flicker does not
+      // manufacture leave/re-enter events.
+      for (const key of this.presentCats.keys()) {
+        this.pendingDepartures.delete(key);
       }
-      this.presentCats.clear();
-      this.presentAnonymousCount = 0;
-    } else if (this.presentCats.size === 0) {
-      const entered = Math.max(
-        0,
-        detection.catCount - this.presentAnonymousCount,
+      this.reconcileAnonymousCount(
+        Math.max(0, detection.catCount - this.presentCats.size),
+        occurredAt,
+        transitions,
       );
-      const left = Math.max(
-        0,
-        this.presentAnonymousCount - detection.catCount,
-      );
-      for (let index = 0; index < entered; index += 1) {
-        transitions.push({ catName: null, event: "entered" });
-      }
-      for (let index = 0; index < left; index += 1) {
-        transitions.push({ catName: null, event: "left" });
-      }
-      this.presentAnonymousCount = detection.catCount;
     }
 
     const entries = [];

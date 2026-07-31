@@ -113,6 +113,11 @@ The current `inference-sdk` dependency does not support Python 3.13 or newer.
 On older Raspberry Pi OS releases, `libcamera-vid` can be used instead of
 `rpicam-vid`.
 
+`npm run setup:python` rebuilds `.venv` with the interpreter reported by
+`python3 --version`. This prevents an older `.venv` created with Python 3.13
+from being reused accidentally. Because the environment is rebuilt, install
+project-specific Python packages through `requirements.txt`.
+
 ## Quick start
 
 1. Confirm the Pi can see the camera:
@@ -177,10 +182,11 @@ The schedule is saved to `data/inference-schedule.json` by default.
 
 ### Review detections
 
-Each presence change appears immediately in the live detection log and is
-appended to `data/detection-log.jsonl`. The first frame containing an identified
-cat records an entry such as `Bobby entered.`. Repeated frames are silent until
-that cat disappears, when Nine Lives records `Bobby left.`.
+Each presence change appears in the live detection log and is appended to
+`data/detection-log.jsonl`. The first frame containing an identified cat records
+an entry such as `Bobby entered.`. A cat must remain absent for one second before
+Nine Lives records `Bobby left.`, preventing brief model flicker from producing
+repeated leave and re-entry events.
 
 Because the history is stored on the server, it remains available across
 browser refreshes, device restarts, and multiple days.
@@ -224,6 +230,7 @@ Arguments are passed directly to the camera process without a shell.
 | `INFERENCE_JPEG_QUALITY` | `85` | Frames sent to the inference session |
 | `INFERENCE_SCHEDULE_FILE` | `data/inference-schedule.json` | Saved schedule |
 | `DETECTION_LOG_FILE` | `data/detection-log.jsonl` | Detection history |
+| `DETECTION_LOG_COOLDOWN_MS` | `1000` | Continuous absence required before logging an exit |
 
 `CAMERA_MJPEG_URL` can point the worker at a different MJPEG source. By
 default, it uses the Node server's private loopback stream, so the inference
