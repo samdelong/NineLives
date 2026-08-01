@@ -67,6 +67,22 @@ test("extracts cat names from strings and boolean maps", () => {
   assert.equal(mapped.catCount, 1);
 });
 
+test("treats unknown-cat labels as unnamed positive detections", () => {
+  for (const label of [
+    "unknown cat",
+    "Unknown_Cat",
+    "unidentified cat",
+    "unrecognized-cat",
+    "not recognized",
+    "no match",
+  ]) {
+    const detection = extractCatDetection({ identified_cats: [label] });
+    assert.deepEqual(detection.catNames, [], label);
+    assert.equal(detection.catCount, 1, label);
+    assert.equal(detection.detected, true, label);
+  }
+});
+
 test("falls back to raw cat prediction labels", () => {
   const detection = extractCatDetection({
     raw_cat_predictions: [
@@ -251,6 +267,39 @@ test("cancels a pending exit when detection flickers for less than one second", 
     const [left] = await log.recordFromInference({ identified_cats: [] });
     assert.equal(left.message, "Bobby left.");
     assert.equal(log.getStatus().total, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("does not log identity flicker between a known and unknown cat", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-identity-flicker-"));
+  const filePath = join(directory, "detections.jsonl");
+  let now = new Date("2026-07-30T12:00:00.000Z");
+
+  try {
+    const log = new DetectionLog({ filePath, now: () => now });
+    const [entered] = await log.recordFromInference({
+      identified_cats: ["bobby"],
+    });
+    assert.equal(entered.message, "Bobby entered.");
+
+    for (let index = 1; index <= 5; index += 1) {
+      now = new Date(2026, 6, 30, 8, 0, index);
+      assert.deepEqual(
+        await log.recordFromInference({
+          identified_cats: ["unknown cat"],
+        }),
+        [],
+      );
+      now = new Date(2026, 6, 30, 8, 0, index, 100);
+      assert.deepEqual(
+        await log.recordFromInference({ identified_cats: ["bobby"] }),
+        [],
+      );
+    }
+
+    assert.equal(log.getStatus().total, 1);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

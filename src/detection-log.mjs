@@ -39,7 +39,7 @@ const NON_NAME_KEYS = new Set([
 ]);
 
 const ABSENT_NAME_VALUES =
-  /^(?:0|false|n\/a|no|no cats?|none|null|unknown|unidentified)$/i;
+  /^(?:0|false|n\/a|no|no cats?|none|null|unknown(?:[ _-]+cats?)?|unidentified(?:[ _-]+cats?)?|unrecognized(?:[ _-]+cats?)?|not[ _-]+(?:identified|recognized)|no[ _-]+match)$/i;
 const GENERIC_CAT_VALUES = /^(?:a |the )?cats?$/i;
 const DEFAULT_LOG_COOLDOWN_MS = 1_000;
 
