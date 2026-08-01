@@ -10,6 +10,7 @@ export class InferenceStreamPublisher {
   constructor({ targetFps = 24 } = {}) {
     this.targetFps = targetFps;
     this.clients = new Set();
+    this.frameListeners = new Set();
     this.state = "stopped";
     this.workerPid = null;
     this.lastError = null;
@@ -42,9 +43,11 @@ export class InferenceStreamPublisher {
     const frame = {
       buffer: Buffer.from(buffer),
       contentType,
+      frameId,
+      capturedAt: new Date(),
     };
     this.latestFrame = frame;
-    this.latestFrameAt = new Date();
+    this.latestFrameAt = frame.capturedAt;
     this.latestFrameId = frameId;
     this.inferenceCount += 1;
     this.state = "live";
@@ -62,6 +65,14 @@ export class InferenceStreamPublisher {
         continue;
       }
       writeStreamFrame(response, frame);
+    }
+
+    for (const listener of this.frameListeners) {
+      try {
+        listener(frame);
+      } catch {
+        // A recorder or observer must not interrupt the live stream.
+      }
     }
   }
 
@@ -86,6 +97,14 @@ export class InferenceStreamPublisher {
     if (this.latestFrame) {
       writeStreamFrame(response, this.latestFrame);
     }
+  }
+
+  subscribeToFrames(listener) {
+    if (typeof listener !== "function") {
+      throw new TypeError("A frame listener function is required.");
+    }
+    this.frameListeners.add(listener);
+    return () => this.frameListeners.delete(listener);
   }
 
   getStatus() {
@@ -116,5 +135,6 @@ export class InferenceStreamPublisher {
       response.end();
     }
     this.clients.clear();
+    this.frameListeners.clear();
   }
 }

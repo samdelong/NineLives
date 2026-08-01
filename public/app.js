@@ -289,6 +289,26 @@ function renderDetectionLog() {
       body.append(message);
     }
 
+    if (entry.clipId) {
+      const clip = document.createElement(
+        entry.clipReady ? "a" : "span",
+      );
+      clip.className = entry.clipReady
+        ? "detection-log-clip"
+        : "detection-log-clip detection-log-clip--pending";
+      if (entry.clipReady) {
+        clip.href = `/api/clips/${encodeURIComponent(entry.clipId)}.mp4`;
+        clip.target = "_blank";
+        clip.rel = "noopener";
+        clip.textContent = "Watch 10s clip →";
+      } else if (entry.clipStatus === "recording") {
+        clip.textContent = "Recording 10s clip…";
+      } else {
+        clip.textContent = "Clip unavailable";
+      }
+      body.append(clip);
+    }
+
     row.append(dot, body);
     elements.detectionLog.append(row);
   }
@@ -344,11 +364,19 @@ function connectDetectionLog() {
   source.addEventListener("detection", (event) => {
     try {
       const entry = JSON.parse(event.data);
-      if (!detectionEntries.some((existing) => existing.id === entry.id)) {
+      const existingIndex = detectionEntries.findIndex(
+        (existing) => existing.id === entry.id,
+      );
+      if (existingIndex === -1) {
         detectionEntries.unshift(entry);
         detectionLogTotal += 1;
-        renderDetectionLog();
+      } else {
+        detectionEntries[existingIndex] = {
+          ...detectionEntries[existingIndex],
+          ...entry,
+        };
       }
+      renderDetectionLog();
     } catch {
       void loadDetectionLog();
     }

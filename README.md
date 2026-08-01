@@ -91,6 +91,7 @@ you care about.
 - Self-hosted or compatible remote Roboflow inference
 - Exact daily inference windows with overnight scheduling
 - Persistent, multi-day JSONL detection history
+- Event-centered MP4 clips with five seconds before and after each transition
 - Live log updates using server-sent events
 - Per-cat entry and exit transitions without repeated-frame spam
 - Camera and inference health reporting
@@ -106,12 +107,19 @@ you care about.
 - Node.js 20 or newer
 - Python 3.10–3.12
 - `rpicam-vid` available on the Pi
+- FFmpeg for browser-playable event clips
 - A Roboflow API key, workspace, and Workflow
 - A reachable Roboflow Inference Server or compatible endpoint
 
 The current `inference-sdk` dependency does not support Python 3.13 or newer.
 On older Raspberry Pi OS releases, `libcamera-vid` can be used instead of
 `rpicam-vid`.
+
+Install FFmpeg on Raspberry Pi OS with:
+
+```bash
+sudo apt install ffmpeg
+```
 
 `npm run setup:python` rebuilds `.venv` with the interpreter reported by
 `python3 --version`. This prevents an older `.venv` created with Python 3.13
@@ -191,6 +199,14 @@ repeated leave and re-entry events.
 Because the history is stored on the server, it remains available across
 browser refreshes, device restarts, and multiple days.
 
+### Watch event clips
+
+Every confirmed entry or exit starts a 10-second annotated MP4 recording. Nine
+Lives keeps a rolling five-second frame buffer, then records another five
+seconds after the event. This captures the actual movement even though exits
+use a one-second anti-flicker delay. Finished clips are linked from their
+detection-log entries and saved in `data/clips` by default.
+
 ## Configuration
 
 Every setting can be placed in `.env.local`. The file is excluded from Git so
@@ -231,6 +247,10 @@ Arguments are passed directly to the camera process without a shell.
 | `INFERENCE_SCHEDULE_FILE` | `data/inference-schedule.json` | Saved schedule |
 | `DETECTION_LOG_FILE` | `data/detection-log.jsonl` | Detection history |
 | `DETECTION_LOG_COOLDOWN_MS` | `1000` | Continuous absence required before logging an exit |
+| `DETECTION_CLIPS_ENABLED` | `true` | Record a clip for each entry and exit |
+| `DETECTION_CLIP_DIRECTORY` | `data/clips` | Saved MP4 clips |
+| `DETECTION_CLIP_DURATION_SECONDS` | `10` | Total event-centered clip length |
+| `FFMPEG_COMMAND` | `ffmpeg` | FFmpeg executable used to encode MP4 clips |
 
 `CAMERA_MJPEG_URL` can point the worker at a different MJPEG source. By
 default, it uses the Node server's private loopback stream, so the inference
@@ -267,6 +287,7 @@ npm test
 | `GET` | `/api/status` | Camera, inference, and schedule health |
 | `GET` | `/api/detections` | Complete persistent detection history |
 | `GET` | `/api/detections/stream` | Live detection events over SSE |
+| `GET` | `/api/clips/:id.mp4` | Saved annotated event clip |
 | `GET` | `/api/schedule` | Current daily inference schedule |
 | `PUT` | `/api/schedule` | Validate and save the schedule |
 | `GET` | `/api/inference/latest` | Latest Workflow prediction data |
@@ -276,7 +297,7 @@ npm test
 
 - [ ] Guided cat enrollment: hold up a cat to create its profile
 - [ ] Add, rename, and remove known cats
-- [ ] Save snapshots and short clips around detections
+- [x] Save event-centered clips around detections
 - [ ] Optional notifications and webhooks
 - [ ] Multi-camera support
 

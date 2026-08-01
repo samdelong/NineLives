@@ -890,7 +890,8 @@ h1 {
 
 .detection-log-title,
 .detection-log-time,
-.detection-log-message {
+.detection-log-message,
+.detection-log-clip {
   margin: 0;
 }
 
@@ -912,6 +913,26 @@ h1 {
   color: var(--muted);
   font-size: 9px;
   line-height: 1.4;
+}
+
+.detection-log-clip {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--moss);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+}
+
+a.detection-log-clip:hover {
+  text-decoration: underline;
+}
+
+.detection-log-clip--pending {
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .infer-button {

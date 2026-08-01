@@ -105,6 +105,9 @@ test("records one entered and one left event per identified cat", async () => {
     assert.equal(bobbyEntered.event, "entered");
     assert.equal(bobbyEntered.catName, "Bobby");
     assert.equal(bobbyEntered.frameId, "10");
+    assert.equal(bobbyEntered.clipId, bobbyEntered.id);
+    assert.equal(bobbyEntered.clipReady, false);
+    assert.equal(bobbyEntered.clipStatus, "recording");
 
     now = new Date("2026-07-30T12:00:01.000Z");
     assert.deepEqual(

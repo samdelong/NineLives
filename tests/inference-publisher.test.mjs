@@ -6,6 +6,10 @@ const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 
 test("retains annotated WebRTC frames and data-channel results", () => {
   const publisher = new InferenceStreamPublisher({ targetFps: 8 });
+  const observedFrames = [];
+  const unsubscribe = publisher.subscribeToFrames((frame) => {
+    observedFrames.push(frame);
+  });
 
   publisher.setWorkerState("running", { pid: 1234 });
   publisher.publishFrame(JPEG, {
@@ -21,6 +25,9 @@ test("retains annotated WebRTC frames and data-channel results", () => {
   );
 
   assert.deepEqual(publisher.latestFrame.buffer, JPEG);
+  assert.equal(observedFrames.length, 1);
+  assert.equal(observedFrames[0].frameId, "frame-41");
+  assert.ok(observedFrames[0].capturedAt instanceof Date);
   assert.equal(publisher.latestResult.identified_cats, 1);
   assert.equal(publisher.inferenceCount, 1);
   assert.equal(publisher.getStatus().state, "live");
@@ -28,6 +35,7 @@ test("retains annotated WebRTC frames and data-channel results", () => {
   assert.equal(publisher.getStatus().targetFps, 8);
   assert.equal(publisher.getStatus().latestFrameId, "frame-41");
   assert.equal(publisher.getStatus().latestDataFrameId, "frame-41");
+  unsubscribe();
 });
 
 test("rejects non-image annotated frames", () => {

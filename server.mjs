@@ -16,6 +16,10 @@ import {
   CameraPublisher,
 } from "./src/camera-publisher.mjs";
 import { DetectionLog } from "./src/detection-log.mjs";
+import {
+  EventClipRecorder,
+  isValidClipId,
+} from "./src/event-clip-recorder.mjs";
 import { InferenceStreamPublisher } from "./src/inference-publisher.mjs";
 import { InferenceScheduleController } from "./src/inference-schedule.mjs";
 import { InferenceWorker } from "./src/inference-worker.mjs";
@@ -176,6 +180,19 @@ export function createConfig(env = process.env) {
         max: 60_000,
       }),
     },
+    clips: {
+      enabled: env.DETECTION_CLIPS_ENABLED?.toLowerCase() !== "false",
+      directory: resolve(
+        ROOT_DIR,
+        env.DETECTION_CLIP_DIRECTORY || "data/clips",
+      ),
+      durationMs:
+        integerFromEnv(env.DETECTION_CLIP_DURATION_SECONDS, 10, {
+          min: 2,
+          max: 60,
+        }) * 1_000,
+      ffmpegCommand: env.FFMPEG_COMMAND || "ffmpeg",
+    },
   };
 }
 
@@ -285,6 +302,7 @@ export function createMonitorServer({
   inferencePublisher,
   inferenceSchedule,
   detectionLog,
+  clipRecorder,
   sinkToken,
   config,
 }) {
@@ -345,7 +363,18 @@ export function createMonitorServer({
         inferencePublisher.publishData(data, {
           frameId,
         });
-        await detectionLog.recordFromInference(data, { frameId });
+        const entries = await detectionLog.recordFromInference(data, {
+          frameId,
+        });
+        for (const entry of entries) {
+          void clipRecorder?.record(entry).catch((error) => {
+            console.error(
+              `Could not record event clip: ${
+                error instanceof Error ? error.message : error
+              }`,
+            );
+          });
+        }
         sendJson(response, 202, { ok: true });
       } catch (error) {
         const status =
@@ -375,7 +404,9 @@ export function createMonitorServer({
 
     if (url.pathname === "/api/detections" && method === "GET") {
       sendJson(response, 200, {
-        entries: detectionLog.getEntries(),
+        entries: detectionLog
+          .getEntries()
+          .map((entry) => clipRecorder?.withClipStatus(entry) ?? entry),
         ...detectionLog.getStatus(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
@@ -384,6 +415,40 @@ export function createMonitorServer({
 
     if (url.pathname === "/api/detections/stream" && method === "GET") {
       detectionLog.openStream(response);
+      return;
+    }
+
+    const clipMatch = url.pathname.match(/^\/api\/clips\/([^/]+)\.mp4$/);
+    if (clipMatch && (method === "GET" || method === "HEAD")) {
+      const clipId = clipMatch[1];
+      if (!clipRecorder || !isValidClipId(clipId)) {
+        sendJson(response, 404, { error: "Clip not found." });
+        return;
+      }
+
+      const status = clipRecorder.getClipStatus(clipId);
+      if (status === "recording") {
+        sendJson(response, 425, { error: "Clip is still recording." });
+        return;
+      }
+      if (status !== "ready") {
+        sendJson(response, 404, { error: "Clip not found." });
+        return;
+      }
+
+      try {
+        const clip = await readFile(clipRecorder.clipPath(clipId));
+        response.writeHead(200, {
+          "Content-Type": "video/mp4",
+          "Content-Length": clip.length,
+          "Cache-Control": "private, max-age=31536000, immutable",
+          "Content-Disposition": `inline; filename="${clipId}.mp4"`,
+          "X-Content-Type-Options": "nosniff",
+        });
+        response.end(method === "HEAD" ? undefined : clip);
+      } catch {
+        sendJson(response, 404, { error: "Clip not found." });
+      }
       return;
     }
 
@@ -467,6 +532,17 @@ export async function startApplication() {
   const inferencePublisher = new InferenceStreamPublisher({
     targetFps: config.inference.framerate,
   });
+  let detectionLog;
+  const clipRecorder = config.clips.enabled
+    ? new EventClipRecorder({
+        publisher: inferencePublisher,
+        directory: config.clips.directory,
+        durationMs: config.clips.durationMs,
+        fps: config.inference.framerate,
+        ffmpegCommand: config.clips.ffmpegCommand,
+        onStatus: (entry) => detectionLog?.broadcast(entry),
+      })
+    : null;
   const sinkToken = randomBytes(32).toString("hex");
   const inferenceWorker = new InferenceWorker({
     command: config.inference.pythonCommand,
@@ -499,16 +575,22 @@ export async function startApplication() {
     worker: inferenceWorker,
     filePath: config.inference.scheduleFile,
   });
-  const detectionLog = new DetectionLog({
+  detectionLog = new DetectionLog({
     filePath: config.detectionLog.filePath,
     cooldownMs: config.detectionLog.cooldownMs,
+    clipsEnabled: config.clips.enabled,
   });
-  await Promise.all([inferenceSchedule.load(), detectionLog.load()]);
+  await Promise.all([
+    inferenceSchedule.load(),
+    detectionLog.load(),
+    clipRecorder?.start(),
+  ]);
   const server = createMonitorServer({
     publisher,
     inferencePublisher,
     inferenceSchedule,
     detectionLog,
+    clipRecorder,
     sinkToken,
     config,
   });
@@ -539,6 +621,7 @@ export async function startApplication() {
   const shutdown = () => {
     inferenceSchedule.stop();
     detectionLog.stop();
+    clipRecorder?.stop();
     inferenceWorker.stop();
     publisher.stop();
     server.close(() => process.exit(0));
@@ -555,6 +638,7 @@ export async function startApplication() {
     inferenceWorker,
     inferenceSchedule,
     detectionLog,
+    clipRecorder,
     config,
   };
 }

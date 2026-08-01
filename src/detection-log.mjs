@@ -311,11 +311,13 @@ export class DetectionLog {
     filePath,
     now = () => new Date(),
     cooldownMs = DEFAULT_LOG_COOLDOWN_MS,
+    clipsEnabled = true,
     logger = console,
   }) {
     this.filePath = filePath;
     this.now = now;
     this.cooldownMs = Math.max(0, cooldownMs);
+    this.clipsEnabled = clipsEnabled;
     this.logger = logger;
 
     this.entries = [];
@@ -513,8 +515,9 @@ export class DetectionLog {
 
     const entries = [];
     for (const transition of transitions) {
+      const id = randomUUID();
       const entry = {
-        id: randomUUID(),
+        id,
         detectedAt: occurredAt.toISOString(),
         event: transition.event,
         catName: transition.catName,
@@ -526,6 +529,9 @@ export class DetectionLog {
         workflowMessage: detection.message,
         workflowEventId: detection.workflowEventId,
         frameId: frameId === null ? null : String(frameId),
+        clipId: this.clipsEnabled ? id : null,
+        clipReady: false,
+        clipStatus: this.clipsEnabled ? "recording" : "disabled",
       };
       await this.persist(entry);
       this.entries.push(entry);
