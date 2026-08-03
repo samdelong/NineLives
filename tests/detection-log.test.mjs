@@ -102,7 +102,11 @@ test("records one entered and one left event per identified cat", async () => {
   let now = new Date("2026-07-30T12:00:00.000Z");
 
   try {
-    const log = new DetectionLog({ filePath, now: () => now });
+    const log = new DetectionLog({
+      filePath,
+      now: () => now,
+      confirmationMs: 0,
+    });
     await log.load();
 
     assert.deepEqual(
@@ -172,10 +176,18 @@ test("restores current cat presence from persisted transitions", async () => {
   let now = new Date("2026-07-30T12:00:00.000Z");
 
   try {
-    const firstLog = new DetectionLog({ filePath, now: () => now });
+    const firstLog = new DetectionLog({
+      filePath,
+      now: () => now,
+      confirmationMs: 0,
+    });
     await firstLog.recordFromInference({ identified_cats: ["bobby"] });
 
-    const reloaded = new DetectionLog({ filePath, now: () => now });
+    const reloaded = new DetectionLog({
+      filePath,
+      now: () => now,
+      confirmationMs: 0,
+    });
     await reloaded.load();
     assert.deepEqual(
       await reloaded.recordFromInference({ identified_cats: ["bobby"] }),
@@ -201,7 +213,11 @@ test("tracks anonymous cats by count when no identities are available", async ()
   let now = new Date("2026-07-30T12:00:00.000Z");
 
   try {
-    const log = new DetectionLog({ filePath, now: () => now });
+    const log = new DetectionLog({
+      filePath,
+      now: () => now,
+      confirmationMs: 0,
+    });
     const entered = await log.recordFromInference({ identified_cats: 2 });
     assert.deepEqual(
       entered.map((entry) => entry.message),
@@ -238,7 +254,11 @@ test("cancels a pending exit when detection flickers for less than one second", 
   let now = new Date("2026-07-30T12:00:00.000Z");
 
   try {
-    const log = new DetectionLog({ filePath, now: () => now });
+    const log = new DetectionLog({
+      filePath,
+      now: () => now,
+      confirmationMs: 0,
+    });
     const [entered] = await log.recordFromInference({
       identified_cats: ["bobby"],
     });
@@ -272,13 +292,111 @@ test("cancels a pending exit when detection flickers for less than one second", 
   }
 });
 
+test("requires five continuous seconds before logging a detection", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-confirmation-"));
+  const filePath = join(directory, "detections.jsonl");
+  let now = new Date("2026-07-30T12:00:00.000Z");
+
+  try {
+    const log = new DetectionLog({ filePath, now: () => now });
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: ["bobby"] }),
+      [],
+    );
+
+    now = new Date("2026-07-30T12:00:04.900Z");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: ["bobby"] }),
+      [],
+    );
+
+    now = new Date("2026-07-30T12:00:05.000Z");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: [] }),
+      [],
+    );
+
+    now = new Date("2026-07-30T12:00:06.000Z");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: ["bobby"] }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:10.999Z");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: ["bobby"] }),
+      [],
+    );
+
+    now = new Date("2026-07-30T12:00:11.001Z");
+    const [entered] = await log.recordFromInference({
+      identified_cats: ["bobby"],
+    });
+    assert.equal(entered.message, "Bobby entered.");
+    assert.equal(log.getStatus().total, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("keeps confirmation running through a brief unknown identity", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-unknown-confirmation-"));
+  const filePath = join(directory, "detections.jsonl");
+  let now = new Date("2026-07-30T12:00:00.000Z");
+
+  try {
+    const log = new DetectionLog({ filePath, now: () => now });
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: ["bobby"] }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:02.000Z");
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: ["unknown cat"] }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:05.100Z");
+    const [entered] = await log.recordFromInference({
+      identified_cats: ["unknown cat"],
+    });
+    assert.equal(entered.message, "Bobby entered.");
+    assert.equal(log.getStatus().total, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("confirms an unidentified cat after five continuous seconds", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-anonymous-confirmation-"));
+  const filePath = join(directory, "detections.jsonl");
+  let now = new Date("2026-07-30T12:00:00.000Z");
+
+  try {
+    const log = new DetectionLog({ filePath, now: () => now });
+    assert.deepEqual(
+      await log.recordFromInference({ identified_cats: ["unknown cat"] }),
+      [],
+    );
+    now = new Date("2026-07-30T12:00:05.100Z");
+    const [entered] = await log.recordFromInference({
+      identified_cats: ["unknown cat"],
+    });
+    assert.equal(entered.message, "A cat entered.");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("does not log identity flicker between a known and unknown cat", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nine-lives-identity-flicker-"));
   const filePath = join(directory, "detections.jsonl");
   let now = new Date("2026-07-30T12:00:00.000Z");
 
   try {
-    const log = new DetectionLog({ filePath, now: () => now });
+    const log = new DetectionLog({
+      filePath,
+      now: () => now,
+      confirmationMs: 0,
+    });
     const [entered] = await log.recordFromInference({
       identified_cats: ["bobby"],
     });
@@ -311,7 +429,7 @@ test("streams new persisted presence transitions to live clients", async () => {
   const response = new FakeEventStreamResponse();
 
   try {
-    const log = new DetectionLog({ filePath });
+    const log = new DetectionLog({ filePath, confirmationMs: 0 });
     log.openStream(response);
     await log.recordFromInference({
       identified_cats: ["bobby"],

@@ -56,7 +56,7 @@ test("resolves daytime, overnight, and continuous feeding windows", () => {
 test("persists zero-cat windows and aggregates up to two detected cats", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nine-lives-feeding-windows-"));
   const filePath = join(directory, "feeding-windows.json");
-  const now = new Date(2026, 6, 30, 8, 15);
+  let now = new Date(2026, 6, 30, 8, 15, 0, 0);
   const schedule = {
     enabled: true,
     windows: [{ start: "07:00", end: "09:00" }],
@@ -78,6 +78,24 @@ test("persists zero-cat windows and aggregates up to two detected cats", async (
     assert.deepEqual(window.catNames, []);
 
     await log.observe({ identified_cats: ["bobby"] }, { at: now });
+    now = new Date(2026, 6, 30, 8, 15, 4, 0);
+    await log.observe({ identified_cats: ["bobby"] }, { at: now });
+    assert.equal(log.getWindows([], now)[0].catCount, 0);
+
+    now = new Date(2026, 6, 30, 8, 15, 4, 100);
+    await log.observe({ identified_cats: [] }, { at: now });
+    now = new Date(2026, 6, 30, 8, 15, 5, 0);
+    await log.observe({ identified_cats: ["bobby"] }, { at: now });
+    now = new Date(2026, 6, 30, 8, 15, 10, 1);
+    await log.observe({ identified_cats: ["bobby"] }, { at: now });
+    assert.equal(log.getWindows([], now)[0].catCount, 1);
+
+    now = new Date(2026, 6, 30, 8, 15, 11, 0);
+    await log.observe(
+      { identified_cats: ["bobby", "luna"] },
+      { at: now },
+    );
+    now = new Date(2026, 6, 30, 8, 15, 16, 1);
     await log.observe(
       { identified_cats: ["bobby", "luna"] },
       { at: now },

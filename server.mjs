@@ -180,6 +180,10 @@ export function createConfig(env = process.env) {
         ROOT_DIR,
         env.FEEDING_WINDOW_LOG_FILE || "data/feeding-windows.json",
       ),
+      confirmationMs: integerFromEnv(env.DETECTION_CONFIRMATION_MS, 5_000, {
+        min: 0,
+        max: 60_000,
+      }),
       cooldownMs: integerFromEnv(env.DETECTION_LOG_COOLDOWN_MS, 1_000, {
         min: 0,
         max: 60_000,
@@ -625,10 +629,12 @@ export async function startApplication() {
   const feedingWindowLog = new FeedingWindowLog({
     filePath: config.detectionLog.feedingWindowFilePath,
     scheduleProvider: () => inferenceSchedule.getStatus(),
+    confirmationMs: config.detectionLog.confirmationMs,
   });
   detectionLog = new DetectionLog({
     filePath: config.detectionLog.filePath,
     cooldownMs: config.detectionLog.cooldownMs,
+    confirmationMs: config.detectionLog.confirmationMs,
     clipsEnabled: config.clips.enabled,
   });
   await Promise.all([

@@ -197,9 +197,10 @@ saved videos.
 
 Nine Lives builds each summary from every inference result, while detailed
 presence changes are still appended to `data/detection-log.jsonl`. Feeding-window
-summaries are stored in `data/feeding-windows.json`. A cat must remain absent for
-one second before Nine Lives records a departure, preventing brief model flicker
-from producing repeated events.
+summaries are stored in `data/feeding-windows.json`. A cat must remain visible
+for five continuous seconds before it counts as a detection or starts a video.
+Any gap resets that timer. A cat must then remain absent for one second before
+Nine Lives records a departure.
 
 Because the history is stored on the server, it remains available across
 browser refreshes, device restarts, and multiple days.
@@ -252,6 +253,7 @@ Arguments are passed directly to the camera process without a shell.
 | `INFERENCE_SCHEDULE_FILE` | `data/inference-schedule.json` | Saved schedule |
 | `DETECTION_LOG_FILE` | `data/detection-log.jsonl` | Detection history |
 | `FEEDING_WINDOW_LOG_FILE` | `data/feeding-windows.json` | Aggregated feeding-window history |
+| `DETECTION_CONFIRMATION_MS` | `5000` | Continuous visibility required before a detection counts |
 | `DETECTION_LOG_COOLDOWN_MS` | `1000` | Continuous absence required before logging an exit |
 | `DETECTION_CLIPS_ENABLED` | `true` | Record a clip for each entry and exit |
 | `DETECTION_CLIP_DIRECTORY` | `data/clips` | Saved MP4 clips |

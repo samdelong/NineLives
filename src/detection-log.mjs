@@ -42,6 +42,7 @@ const ABSENT_NAME_VALUES =
   /^(?:0|false|n\/a|no|no cats?|none|null|unknown(?:[ _-]+cats?)?|unidentified(?:[ _-]+cats?)?|unrecognized(?:[ _-]+cats?)?|not[ _-]+(?:identified|recognized)|no[ _-]+match)$/i;
 const GENERIC_CAT_VALUES = /^(?:a |the )?cats?$/i;
 const DEFAULT_LOG_COOLDOWN_MS = 1_000;
+const DEFAULT_DETECTION_CONFIRMATION_MS = 5_000;
 
 function findValuesByKey(value, targetKey, matches = []) {
   if (Array.isArray(value)) {
@@ -311,18 +312,22 @@ export class DetectionLog {
     filePath,
     now = () => new Date(),
     cooldownMs = DEFAULT_LOG_COOLDOWN_MS,
+    confirmationMs = DEFAULT_DETECTION_CONFIRMATION_MS,
     clipsEnabled = true,
     logger = console,
   }) {
     this.filePath = filePath;
     this.now = now;
     this.cooldownMs = Math.max(0, cooldownMs);
+    this.confirmationMs = Math.max(0, confirmationMs);
     this.clipsEnabled = clipsEnabled;
     this.logger = logger;
 
     this.entries = [];
     this.presentCats = new Map();
     this.presentAnonymousCount = 0;
+    this.pendingArrivals = new Map();
+    this.pendingAnonymousArrival = null;
     this.pendingDepartures = new Map();
     this.pendingAnonymousDeparture = null;
     this.clients = new Set();
@@ -368,6 +373,8 @@ export class DetectionLog {
   restorePresenceState() {
     this.presentCats.clear();
     this.presentAnonymousCount = 0;
+    this.pendingArrivals.clear();
+    this.pendingAnonymousArrival = null;
     this.pendingDepartures.clear();
     this.pendingAnonymousDeparture = null;
 
@@ -412,9 +419,67 @@ export class DetectionLog {
     this.presentCats.delete(key);
   }
 
+  markNamedCatPresent(key, name, occurredAt, transitions) {
+    this.pendingDepartures.delete(key);
+    if (this.presentCats.has(key)) {
+      this.pendingArrivals.delete(key);
+      return;
+    }
+
+    const pending = this.pendingArrivals.get(key);
+    if (!pending) {
+      if (this.confirmationMs === 0) {
+        transitions.push({ catName: name, event: "entered" });
+        this.presentCats.set(key, name);
+      } else {
+        this.pendingArrivals.set(key, { name, since: occurredAt });
+      }
+      return;
+    }
+
+    if (occurredAt.getTime() - pending.since.getTime() < this.confirmationMs) {
+      return;
+    }
+
+    transitions.push({ catName: name, event: "entered" });
+    this.pendingArrivals.delete(key);
+    this.presentCats.set(key, name);
+  }
+
   reconcileAnonymousCount(nextCount, occurredAt, transitions) {
-    if (nextCount >= this.presentAnonymousCount) {
+    if (nextCount > this.presentAnonymousCount) {
       this.pendingAnonymousDeparture = null;
+      if (this.confirmationMs === 0) {
+        for (
+          let index = this.presentAnonymousCount;
+          index < nextCount;
+          index += 1
+        ) {
+          transitions.push({ catName: null, event: "entered" });
+        }
+        this.presentAnonymousCount = nextCount;
+        this.pendingAnonymousArrival = null;
+        return;
+      }
+
+      if (
+        !this.pendingAnonymousArrival ||
+        this.pendingAnonymousArrival.count !== nextCount
+      ) {
+        this.pendingAnonymousArrival = {
+          count: nextCount,
+          since: occurredAt,
+        };
+        return;
+      }
+
+      if (
+        occurredAt.getTime() - this.pendingAnonymousArrival.since.getTime() <
+        this.confirmationMs
+      ) {
+        return;
+      }
+
       for (
         let index = this.presentAnonymousCount;
         index < nextCount;
@@ -423,6 +488,13 @@ export class DetectionLog {
         transitions.push({ catName: null, event: "entered" });
       }
       this.presentAnonymousCount = nextCount;
+      this.pendingAnonymousArrival = null;
+      return;
+    }
+
+    this.pendingAnonymousArrival = null;
+    if (nextCount === this.presentAnonymousCount) {
+      this.pendingAnonymousDeparture = null;
       return;
     }
 
@@ -477,14 +549,22 @@ export class DetectionLog {
       let matchedAnonymous = 0;
 
       for (const [key, name] of nextCats) {
-        this.pendingDepartures.delete(key);
-        if (this.presentCats.has(key)) continue;
+        if (this.presentCats.has(key)) {
+          this.pendingArrivals.delete(key);
+          this.pendingDepartures.delete(key);
+          continue;
+        }
         if (matchedAnonymous < anonymousMatches) {
           matchedAnonymous += 1;
+          this.pendingArrivals.delete(key);
+          this.pendingDepartures.delete(key);
+          this.presentCats.set(key, name);
         } else {
-          transitions.push({ catName: name, event: "entered" });
+          this.markNamedCatPresent(key, name, occurredAt, transitions);
         }
-        this.presentCats.set(key, name);
+      }
+      for (const key of this.pendingArrivals.keys()) {
+        if (!nextCats.has(key)) this.pendingArrivals.delete(key);
       }
       for (const [key, name] of this.presentCats) {
         if (!nextCats.has(key)) {
@@ -495,6 +575,7 @@ export class DetectionLog {
       this.presentAnonymousCount -= matchedAnonymous;
       this.reconcileAnonymousCount(0, occurredAt, transitions);
     } else if (!detection.detected) {
+      this.pendingArrivals.clear();
       for (const [key, name] of this.presentCats) {
         this.markNamedCatMissing(key, name, occurredAt, transitions);
       }
@@ -506,8 +587,29 @@ export class DetectionLog {
       for (const key of this.presentCats.keys()) {
         this.pendingDepartures.delete(key);
       }
+
+      const unassignedCount = Math.max(
+        0,
+        detection.catCount - this.presentCats.size,
+      );
+      let retainedPendingCount = 0;
+      for (const [key, pending] of this.pendingArrivals) {
+        if (retainedPendingCount >= unassignedCount) {
+          this.pendingArrivals.delete(key);
+          continue;
+        }
+        retainedPendingCount += 1;
+        if (
+          occurredAt.getTime() - pending.since.getTime() >=
+          this.confirmationMs
+        ) {
+          transitions.push({ catName: pending.name, event: "entered" });
+          this.pendingArrivals.delete(key);
+          this.presentCats.set(key, pending.name);
+        }
+      }
       this.reconcileAnonymousCount(
-        Math.max(0, detection.catCount - this.presentCats.size),
+        Math.max(0, unassignedCount - retainedPendingCount),
         occurredAt,
         transitions,
       );

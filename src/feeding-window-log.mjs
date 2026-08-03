@@ -5,6 +5,7 @@ import { extractCatDetection } from "./detection-log.mjs";
 import { timeToMinutes } from "./inference-schedule.mjs";
 
 const MAX_DISPLAYED_CATS = 2;
+const DEFAULT_DETECTION_CONFIRMATION_MS = 5_000;
 
 function localDayStart(value) {
   const day = new Date(value);
@@ -139,10 +140,83 @@ function addDetection(record, detection) {
   return changed;
 }
 
+function addStableDetection(
+  record,
+  detection,
+  pending,
+  atMs,
+  confirmationMs,
+) {
+  let changed = false;
+  const detectedCount = Math.min(
+    MAX_DISPLAYED_CATS,
+    Math.max(0, detection.catCount),
+  );
+
+  for (let count = 1; count <= MAX_DISPLAYED_CATS; count += 1) {
+    if (record.catCount >= count) {
+      pending.countSince.delete(count);
+      continue;
+    }
+    if (detectedCount < count) {
+      pending.countSince.delete(count);
+      continue;
+    }
+
+    const since = pending.countSince.get(count);
+    if (since === undefined) {
+      if (confirmationMs === 0) {
+        record.catCount = Math.max(record.catCount, count);
+        changed = true;
+      } else {
+        pending.countSince.set(count, atMs);
+      }
+    } else if (atMs - since >= confirmationMs) {
+      record.catCount = Math.max(record.catCount, count);
+      pending.countSince.delete(count);
+      changed = true;
+    }
+  }
+
+  const detectedNames = new Map(
+    detection.catNames.map((name) => [name.toLocaleLowerCase(), name]),
+  );
+  const confirmedNames = new Map(
+    record.catNames.map((name) => [name.toLocaleLowerCase(), name]),
+  );
+  for (const key of pending.nameSince.keys()) {
+    if (!detectedNames.has(key)) pending.nameSince.delete(key);
+  }
+  for (const [key, name] of detectedNames) {
+    if (confirmedNames.has(key)) {
+      pending.nameSince.delete(key);
+      continue;
+    }
+    const since = pending.nameSince.get(key);
+    if (since === undefined) {
+      if (confirmationMs === 0) {
+        confirmedNames.set(key, name);
+        changed = true;
+      } else {
+        pending.nameSince.set(key, atMs);
+      }
+    } else if (atMs - since >= confirmationMs) {
+      confirmedNames.set(key, name);
+      pending.nameSince.delete(key);
+      changed = true;
+    }
+  }
+
+  record.catNames = [...confirmedNames.values()].slice(0, MAX_DISPLAYED_CATS);
+  record.catCount = Math.max(record.catCount, record.catNames.length);
+  return changed;
+}
+
 export class FeedingWindowLog {
   constructor({
     filePath,
     scheduleProvider,
+    confirmationMs = DEFAULT_DETECTION_CONFIRMATION_MS,
     now = () => new Date(),
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
@@ -151,6 +225,7 @@ export class FeedingWindowLog {
   }) {
     this.filePath = filePath;
     this.scheduleProvider = scheduleProvider;
+    this.confirmationMs = Math.max(0, confirmationMs);
     this.now = now;
     this.setIntervalFn = setIntervalFn;
     this.clearIntervalFn = clearIntervalFn;
@@ -159,6 +234,7 @@ export class FeedingWindowLog {
 
     this.windows = [];
     this.byKey = new Map();
+    this.pendingDetections = new Map();
     this.timer = null;
     this.writeQueue = Promise.resolve();
   }
@@ -171,6 +247,7 @@ export class FeedingWindowLog {
         ? windows.filter(isStoredWindow)
         : [];
       this.byKey = new Map(this.windows.map((window) => [window.key, window]));
+      this.pendingDetections.clear();
     } catch (error) {
       if (error?.code !== "ENOENT") {
         this.logger.warn(`Could not load feeding-window history: ${error.message}`);
@@ -203,6 +280,14 @@ export class FeedingWindowLog {
   }
 
   async reconcile(at = this.now()) {
+    const atMs = at.getTime();
+    for (const [windowId] of this.pendingDetections) {
+      const record = this.windows.find((window) => window.id === windowId);
+      if (!record || new Date(record.endedAt).getTime() <= atMs) {
+        this.pendingDetections.delete(windowId);
+      }
+    }
+
     let changed = false;
     for (const occurrence of resolveActiveFeedingWindows(
       this.scheduleProvider(),
@@ -216,6 +301,7 @@ export class FeedingWindowLog {
 
   async observe(data, { at = this.now() } = {}) {
     const detection = extractCatDetection(data);
+    const atMs = at.getTime();
     let changed = false;
     const records = [];
 
@@ -224,7 +310,18 @@ export class FeedingWindowLog {
       at,
     )) {
       const ensured = this.ensureOccurrence(occurrence);
-      const detectionChanged = addDetection(ensured.record, detection);
+      let pending = this.pendingDetections.get(ensured.record.id);
+      if (!pending) {
+        pending = { countSince: new Map(), nameSince: new Map() };
+        this.pendingDetections.set(ensured.record.id, pending);
+      }
+      const detectionChanged = addStableDetection(
+        ensured.record,
+        detection,
+        pending,
+        atMs,
+        this.confirmationMs,
+      );
       changed = ensured.created || detectionChanged || changed;
       records.push(ensured.record);
     }
@@ -315,5 +412,6 @@ export class FeedingWindowLog {
   stop() {
     if (this.timer) this.clearIntervalFn(this.timer);
     this.timer = null;
+    this.pendingDetections.clear();
   }
 }
