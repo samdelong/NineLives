@@ -20,6 +20,7 @@ import {
   EventClipRecorder,
   isValidClipId,
 } from "./src/event-clip-recorder.mjs";
+import { FeedingWindowLog } from "./src/feeding-window-log.mjs";
 import { InferenceStreamPublisher } from "./src/inference-publisher.mjs";
 import { InferenceScheduleController } from "./src/inference-schedule.mjs";
 import { InferenceWorker } from "./src/inference-worker.mjs";
@@ -175,6 +176,10 @@ export function createConfig(env = process.env) {
         ROOT_DIR,
         env.DETECTION_LOG_FILE || "data/detection-log.jsonl",
       ),
+      feedingWindowFilePath: resolve(
+        ROOT_DIR,
+        env.FEEDING_WINDOW_LOG_FILE || "data/feeding-windows.json",
+      ),
       cooldownMs: integerFromEnv(env.DETECTION_LOG_COOLDOWN_MS, 1_000, {
         min: 0,
         max: 60_000,
@@ -302,6 +307,7 @@ export function createMonitorServer({
   inferencePublisher,
   inferenceSchedule,
   detectionLog,
+  feedingWindowLog,
   clipRecorder,
   sinkToken,
   config,
@@ -363,6 +369,7 @@ export function createMonitorServer({
         inferencePublisher.publishData(data, {
           frameId,
         });
+        await feedingWindowLog.observe(data);
         const entries = await detectionLog.recordFromInference(data, {
           frameId,
         });
@@ -398,15 +405,18 @@ export function createMonitorServer({
         inference: inferencePublisher.getStatus(),
         schedule: inferenceSchedule.getStatus(),
         detections: detectionLog.getStatus(),
+        feedingWindows: feedingWindowLog.getStatus(),
       });
       return;
     }
 
     if (url.pathname === "/api/detections" && method === "GET") {
+      const entries = detectionLog
+        .getEntries()
+        .map((entry) => clipRecorder?.withClipStatus(entry) ?? entry);
       sendJson(response, 200, {
-        entries: detectionLog
-          .getEntries()
-          .map((entry) => clipRecorder?.withClipStatus(entry) ?? entry),
+        entries,
+        windows: feedingWindowLog.getWindows(entries),
         ...detectionLog.getStatus(),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
@@ -438,14 +448,51 @@ export function createMonitorServer({
 
       try {
         const clip = await readFile(clipRecorder.clipPath(clipId));
-        response.writeHead(200, {
+        const range = request.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
+        let start = 0;
+        let end = clip.length - 1;
+        let statusCode = 200;
+
+        if (range) {
+          if (!range[1] && range[2]) {
+            const suffixLength = Number.parseInt(range[2], 10);
+            start = Math.max(0, clip.length - suffixLength);
+          } else {
+            start = range[1] ? Number.parseInt(range[1], 10) : 0;
+            end = range[2] ? Number.parseInt(range[2], 10) : end;
+          }
+          if (
+            !Number.isFinite(start) ||
+            !Number.isFinite(end) ||
+            start < 0 ||
+            start > end ||
+            start >= clip.length
+          ) {
+            response.writeHead(416, {
+              "Content-Range": `bytes */${clip.length}`,
+              "Accept-Ranges": "bytes",
+            });
+            response.end();
+            return;
+          }
+          end = Math.min(end, clip.length - 1);
+          statusCode = 206;
+        }
+
+        const body = clip.subarray(start, end + 1);
+        const headers = {
           "Content-Type": "video/mp4",
-          "Content-Length": clip.length,
+          "Content-Length": body.length,
+          "Accept-Ranges": "bytes",
           "Cache-Control": "private, max-age=31536000, immutable",
           "Content-Disposition": `inline; filename="${clipId}.mp4"`,
           "X-Content-Type-Options": "nosniff",
-        });
-        response.end(method === "HEAD" ? undefined : clip);
+        };
+        if (statusCode === 206) {
+          headers["Content-Range"] = `bytes ${start}-${end}/${clip.length}`;
+        }
+        response.writeHead(statusCode, headers);
+        response.end(method === "HEAD" ? undefined : body);
       } catch {
         sendJson(response, 404, { error: "Clip not found." });
       }
@@ -575,6 +622,10 @@ export async function startApplication() {
     worker: inferenceWorker,
     filePath: config.inference.scheduleFile,
   });
+  const feedingWindowLog = new FeedingWindowLog({
+    filePath: config.detectionLog.feedingWindowFilePath,
+    scheduleProvider: () => inferenceSchedule.getStatus(),
+  });
   detectionLog = new DetectionLog({
     filePath: config.detectionLog.filePath,
     cooldownMs: config.detectionLog.cooldownMs,
@@ -583,13 +634,17 @@ export async function startApplication() {
   await Promise.all([
     inferenceSchedule.load(),
     detectionLog.load(),
+    feedingWindowLog.load(),
     clipRecorder?.start(),
   ]);
+  await feedingWindowLog.backfill(detectionLog.getEntries());
+  await feedingWindowLog.start();
   const server = createMonitorServer({
     publisher,
     inferencePublisher,
     inferenceSchedule,
     detectionLog,
+    feedingWindowLog,
     clipRecorder,
     sinkToken,
     config,
@@ -621,6 +676,7 @@ export async function startApplication() {
   const shutdown = () => {
     inferenceSchedule.stop();
     detectionLog.stop();
+    feedingWindowLog.stop();
     clipRecorder?.stop();
     inferenceWorker.stop();
     publisher.stop();
@@ -638,6 +694,7 @@ export async function startApplication() {
     inferenceWorker,
     inferenceSchedule,
     detectionLog,
+    feedingWindowLog,
     clipRecorder,
     config,
   };

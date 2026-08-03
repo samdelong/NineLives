@@ -54,8 +54,9 @@ let latestSchedule = null;
 let scheduleDirty = false;
 let scheduleInitialized = false;
 let selectedScheduleWindows = [];
-let detectionEntries = [];
-let detectionLogTotal = 0;
+let feedingWindows = [];
+let feedingWindowsSignature = "";
+const openFeedingWindowIds = new Set();
 let detectionTimezone;
 
 function formatPiTime(value, timezone) {
@@ -227,24 +228,50 @@ function detectionTimeLabel(value) {
   return new Date(value).toLocaleTimeString([], options);
 }
 
+function feedingWindowTimeLabel(window) {
+  if (window.scheduleStart === window.scheduleEnd) return "All day";
+  const start = detectionTimeLabel(window.startedAt).replace(
+    /:\d{2}(?=\s|$)/,
+    "",
+  );
+  const end = detectionTimeLabel(window.endedAt).replace(
+    /:\d{2}(?=\s|$)/,
+    "",
+  );
+  return `${start}–${end}`;
+}
+
+function feedingWindowVideos(window) {
+  const videosByCat = new Map();
+  for (const entry of window.events ?? []) {
+    if (!entry.clipId) continue;
+    const key = entry.catName?.toLocaleLowerCase() || entry.clipId;
+    const current = videosByCat.get(key);
+    if (!current || (!current.clipReady && entry.clipReady)) {
+      videosByCat.set(key, entry);
+    }
+  }
+  return [...videosByCat.values()];
+}
+
 function renderDetectionLog() {
   elements.detectionLog.replaceChildren();
   elements.detectionLogCount.textContent =
-    `${detectionLogTotal.toLocaleString()} ${
-      detectionLogTotal === 1 ? "event" : "events"
+    `${feedingWindows.length.toLocaleString()} feeding ${
+      feedingWindows.length === 1 ? "window" : "windows"
     }`;
 
-  if (detectionEntries.length === 0) {
+  if (feedingWindows.length === 0) {
     const empty = document.createElement("p");
     empty.className = "detection-log-empty";
-    empty.textContent = "No cat activity saved yet.";
+    empty.textContent = "No feeding windows saved yet.";
     elements.detectionLog.append(empty);
     return;
   }
 
   let currentDate = "";
-  for (const entry of detectionEntries) {
-    const dateLabel = detectionDateLabel(entry.detectedAt);
+  for (const window of feedingWindows) {
+    const dateLabel = detectionDateLabel(window.startedAt);
     if (dateLabel !== currentDate) {
       currentDate = dateLabel;
       const date = document.createElement("p");
@@ -253,63 +280,110 @@ function renderDetectionLog() {
       elements.detectionLog.append(date);
     }
 
-    const row = document.createElement("article");
-    row.className = "detection-log-entry";
-    if (entry.event === "left") {
-      row.classList.add("detection-log-entry--left");
-    }
+    const row = document.createElement("details");
+    row.className = "feeding-window-entry";
+    row.open = openFeedingWindowIds.has(window.id);
+    row.addEventListener("toggle", () => {
+      if (row.open) openFeedingWindowIds.add(window.id);
+      else openFeedingWindowIds.delete(window.id);
+    });
+
+    const summary = document.createElement("summary");
+    summary.className = "feeding-window-summary";
 
     const dot = document.createElement("span");
-    dot.className = "detection-log-dot";
+    dot.className = `feeding-window-dot feeding-window-dot--${
+      window.catCount > 0 ? "detected" : "empty"
+    }`;
     dot.setAttribute("aria-hidden", "true");
 
     const body = document.createElement("div");
+    body.className = "feeding-window-summary-body";
     const title = document.createElement("p");
-    title.className = "detection-log-title";
-    title.textContent =
-      entry.event === "entered" || entry.event === "left"
-        ? entry.message ||
-          `${entry.catName || "A cat"} ${entry.event}.`
-        : `${entry.catCount} ${
-            entry.catCount === 1 ? "cat" : "cats"
-          } detected`;
+    title.className = "feeding-window-title";
+    title.textContent = `${window.catCount} ${
+      window.catCount === 1 ? "cat" : "cats"
+    } detected`;
 
     const detail = document.createElement("p");
-    detail.className = "detection-log-time";
-    detail.textContent = detectionTimeLabel(entry.detectedAt);
+    detail.className = "feeding-window-time";
+    detail.textContent = feedingWindowTimeLabel(window);
     body.append(title, detail);
 
-    const supportingMessage =
-      entry.workflowMessage ||
-      (entry.event ? null : entry.message);
-    if (supportingMessage) {
-      const message = document.createElement("p");
-      message.className = "detection-log-message";
-      message.textContent = String(supportingMessage).slice(0, 180);
-      body.append(message);
+    const side = document.createElement("div");
+    side.className = "feeding-window-summary-side";
+    if (window.status === "active") {
+      const active = document.createElement("span");
+      active.className = "feeding-window-active";
+      active.textContent = "Live";
+      side.append(active);
     }
+    const chevron = document.createElement("span");
+    chevron.className = "feeding-window-chevron";
+    chevron.textContent = "⌄";
+    chevron.setAttribute("aria-hidden", "true");
+    side.append(chevron);
+    summary.append(dot, body, side);
 
-    if (entry.clipId) {
-      const clip = document.createElement(
-        entry.clipReady ? "a" : "span",
-      );
-      clip.className = entry.clipReady
-        ? "detection-log-clip"
-        : "detection-log-clip detection-log-clip--pending";
-      if (entry.clipReady) {
-        clip.href = `/api/clips/${encodeURIComponent(entry.clipId)}.mp4`;
-        clip.target = "_blank";
-        clip.rel = "noopener";
-        clip.textContent = "Watch clip →";
-      } else if (entry.clipStatus === "recording") {
-        clip.textContent = "Recording clip…";
-      } else {
-        clip.textContent = "Clip unavailable";
+    const details = document.createElement("div");
+    details.className = "feeding-window-details";
+
+    const cats = document.createElement("p");
+    cats.className = "feeding-window-cats";
+    cats.textContent = window.catNames?.length
+      ? window.catNames.join(" · ")
+      : window.catCount > 0
+        ? `${window.catCount} unidentified ${
+            window.catCount === 1 ? "cat" : "cats"
+          }`
+        : "No cats were detected during this feeding window.";
+    details.append(cats);
+
+    const videoEntries = feedingWindowVideos(window);
+    if (videoEntries.length > 0) {
+      const videos = document.createElement("div");
+      videos.className = "feeding-window-videos";
+      for (const entry of videoEntries) {
+        const videoCard = document.createElement("article");
+        videoCard.className = "feeding-window-video";
+        const caption = document.createElement("p");
+        caption.className = "feeding-window-video-caption";
+        caption.textContent = `${entry.catName || "Cat"} · ${detectionTimeLabel(
+          entry.detectedAt,
+        )}`;
+        videoCard.append(caption);
+
+        if (entry.clipReady) {
+          const video = document.createElement("video");
+          video.controls = true;
+          video.playsInline = true;
+          video.preload = "none";
+          video.src = `/api/clips/${encodeURIComponent(entry.clipId)}.mp4`;
+          video.setAttribute(
+            "aria-label",
+            `${entry.catName || "Cat"} detection video`,
+          );
+          videoCard.append(video);
+        } else {
+          const clipStatus = document.createElement("p");
+          clipStatus.className = "feeding-window-video-status";
+          clipStatus.textContent =
+            entry.clipStatus === "recording"
+              ? "Video is still recording…"
+              : "Video unavailable";
+          videoCard.append(clipStatus);
+        }
+        videos.append(videoCard);
       }
-      body.append(clip);
+      details.append(videos);
+    } else if (window.catCount > 0) {
+      const noVideo = document.createElement("p");
+      noVideo.className = "feeding-window-video-status";
+      noVideo.textContent = "No video was saved for this window.";
+      details.append(noVideo);
     }
 
-    row.append(dot, body);
+    row.append(summary, details);
     elements.detectionLog.append(row);
   }
 }
@@ -323,17 +397,11 @@ async function loadDetectionLog() {
     }
 
     detectionTimezone = payload.timezone;
-    const merged = new Map(
-      [...payload.entries, ...detectionEntries].map((entry) => [
-        entry.id,
-        entry,
-      ]),
-    );
-    detectionEntries = [...merged.values()].sort(
-      (left, right) =>
-        new Date(right.detectedAt) - new Date(left.detectedAt),
-    );
-    detectionLogTotal = Math.max(payload.total, detectionEntries.length);
+    const nextWindows = Array.isArray(payload.windows) ? payload.windows : [];
+    const nextSignature = JSON.stringify(nextWindows);
+    if (nextSignature === feedingWindowsSignature) return;
+    feedingWindows = nextWindows;
+    feedingWindowsSignature = nextSignature;
     renderDetectionLog();
   } catch {
     elements.detectionLogConnection.textContent = "Unavailable";
@@ -345,7 +413,6 @@ async function loadDetectionLog() {
 function connectDetectionLog() {
   if (!("EventSource" in window)) {
     elements.detectionLogConnection.textContent = "Polling";
-    window.setInterval(() => void loadDetectionLog(), 5_000);
     return;
   }
 
@@ -363,20 +430,8 @@ function connectDetectionLog() {
   });
   source.addEventListener("detection", (event) => {
     try {
-      const entry = JSON.parse(event.data);
-      const existingIndex = detectionEntries.findIndex(
-        (existing) => existing.id === entry.id,
-      );
-      if (existingIndex === -1) {
-        detectionEntries.unshift(entry);
-        detectionLogTotal += 1;
-      } else {
-        detectionEntries[existingIndex] = {
-          ...detectionEntries[existingIndex],
-          ...entry,
-        };
-      }
-      renderDetectionLog();
+      JSON.parse(event.data);
+      void loadDetectionLog();
     } catch {
       void loadDetectionLog();
     }
@@ -778,3 +833,4 @@ void refreshStatus();
 void loadDetectionLog();
 connectDetectionLog();
 window.setInterval(() => void refreshStatus(), 1_000);
+window.setInterval(() => void loadDetectionLog(), 10_000);

@@ -90,7 +90,7 @@ you care about.
 - Continuously annotated Workflow video in a browser
 - Self-hosted or compatible remote Roboflow inference
 - Exact daily inference windows with overnight scheduling
-- Persistent, multi-day JSONL detection history
+- Persistent, multi-day feeding-window history
 - Thirty-second MP4 clips for entry and exit events
 - Live log updates using server-sent events
 - Per-cat entry and exit transitions without repeated-frame spam
@@ -190,11 +190,16 @@ The schedule is saved to `data/inference-schedule.json` by default.
 
 ### Review detections
 
-Each presence change appears in the live detection log and is appended to
-`data/detection-log.jsonl`. The first frame containing an identified cat records
-an entry such as `Bobby entered.`. A cat must remain absent for one second before
-Nine Lives records `Bobby left.`, preventing brief model flicker from producing
-repeated leave and re-entry events.
+The detection log shows one expandable row for each scheduled feeding window,
+including windows where zero cats were detected. Each row summarizes whether
+zero, one, or two cats appeared. Open it to see the identified cats and their
+saved videos.
+
+Nine Lives builds each summary from every inference result, while detailed
+presence changes are still appended to `data/detection-log.jsonl`. Feeding-window
+summaries are stored in `data/feeding-windows.json`. A cat must remain absent for
+one second before Nine Lives records a departure, preventing brief model flicker
+from producing repeated events.
 
 Because the history is stored on the server, it remains available across
 browser refreshes, device restarts, and multiple days.
@@ -246,6 +251,7 @@ Arguments are passed directly to the camera process without a shell.
 | `INFERENCE_JPEG_QUALITY` | `85` | Frames sent to the inference session |
 | `INFERENCE_SCHEDULE_FILE` | `data/inference-schedule.json` | Saved schedule |
 | `DETECTION_LOG_FILE` | `data/detection-log.jsonl` | Detection history |
+| `FEEDING_WINDOW_LOG_FILE` | `data/feeding-windows.json` | Aggregated feeding-window history |
 | `DETECTION_LOG_COOLDOWN_MS` | `1000` | Continuous absence required before logging an exit |
 | `DETECTION_CLIPS_ENABLED` | `true` | Record a clip for each entry and exit |
 | `DETECTION_CLIP_DIRECTORY` | `data/clips` | Saved MP4 clips |
@@ -285,7 +291,7 @@ npm test
 | `GET` | `/api/stream` | Annotated Workflow stream shown in the dashboard |
 | `GET` | `/api/camera/stream` | Raw `rpicam-vid` stream for local diagnostics |
 | `GET` | `/api/status` | Camera, inference, and schedule health |
-| `GET` | `/api/detections` | Complete persistent detection history |
+| `GET` | `/api/detections` | Feeding-window summaries and detailed detection history |
 | `GET` | `/api/detections/stream` | Live detection events over SSE |
 | `GET` | `/api/clips/:id.mp4` | Saved annotated event clip |
 | `GET` | `/api/schedule` | Current daily inference schedule |
