@@ -1,5 +1,5 @@
 import { spawn as spawnChild } from "node:child_process";
-import { mkdir, readdir, rename, unlink } from "node:fs/promises";
+import { link, mkdir, readdir, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 
 const CLIP_ID_PATTERN =
@@ -13,30 +13,28 @@ export class EventClipRecorder {
   constructor({
     publisher,
     directory,
-    durationMs = 10_000,
+    durationMs = 30_000,
     fps = 24,
     ffmpegCommand = "ffmpeg",
     spawn = spawnChild,
-    now = () => new Date(),
     logger = console,
     onStatus = () => undefined,
   }) {
     this.publisher = publisher;
     this.directory = directory;
     this.durationMs = Math.max(10, durationMs);
-    this.preRollMs = Math.floor(this.durationMs / 2);
-    this.postRollMs = this.durationMs - this.preRollMs;
     this.fps = Math.max(1, fps);
     this.ffmpegCommand = ffmpegCommand;
     this.spawn = spawn;
-    this.now = now;
     this.logger = logger;
     this.onStatus = onStatus;
 
-    this.frames = [];
     this.active = new Map();
+    this.aliases = new Map();
+    this.currentRecording = null;
     this.ready = new Set();
     this.errors = new Map();
+    this.starting = null;
     this.unsubscribe = null;
   }
 
@@ -60,23 +58,6 @@ export class EventClipRecorder {
 
   handleFrame(frame) {
     if (frame.contentType !== "image/jpeg") return;
-
-    const capturedAtMs =
-      frame.capturedAt instanceof Date
-        ? frame.capturedAt.getTime()
-        : this.now().getTime();
-    this.frames.push({
-      buffer: frame.buffer,
-      capturedAtMs,
-    });
-
-    const oldestAllowed = capturedAtMs - this.preRollMs;
-    while (
-      this.frames.length > 0 &&
-      this.frames[0].capturedAtMs < oldestAllowed
-    ) {
-      this.frames.shift();
-    }
 
     for (const recording of this.active.values()) {
       this.writeFrame(recording, frame.buffer);
@@ -102,9 +83,10 @@ export class EventClipRecorder {
 
   getClipStatus(clipId) {
     if (!isValidClipId(clipId)) return "missing";
-    if (this.active.has(clipId)) return "recording";
-    if (this.ready.has(clipId)) return "ready";
     if (this.errors.has(clipId)) return "error";
+    const primaryClipId = this.aliases.get(clipId) ?? clipId;
+    if (this.active.has(primaryClipId)) return "recording";
+    if (this.ready.has(clipId)) return "ready";
     return "missing";
   }
 
@@ -118,14 +100,48 @@ export class EventClipRecorder {
     };
   }
 
+  coverWithCurrentRecording(recording, entry) {
+    const clipId = entry.clipId;
+    if (!recording.entries.has(clipId)) {
+      recording.entries.set(clipId, entry);
+      this.aliases.set(clipId, recording.entry.clipId);
+      this.errors.delete(clipId);
+      this.onStatus(this.withClipStatus(entry));
+    }
+    return recording.completion;
+  }
+
   async record(entry) {
     const clipId = entry.clipId;
     if (!isValidClipId(clipId)) return { status: "missing" };
     if (this.ready.has(clipId)) return { status: "ready" };
     if (this.active.has(clipId)) return this.active.get(clipId).completion;
-    if (!this.unsubscribe) await this.start();
 
-    const finalPath = this.clipPath(clipId);
+    if (this.currentRecording && !this.currentRecording.settled) {
+      return this.coverWithCurrentRecording(this.currentRecording, entry);
+    }
+
+    if (this.starting) {
+      await this.starting;
+      return this.record(entry);
+    }
+
+    let releaseStarting;
+    this.starting = new Promise((resolve) => {
+      releaseStarting = resolve;
+    });
+
+    if (!this.unsubscribe) {
+      try {
+        await this.start();
+      } catch (error) {
+        this.starting = null;
+        releaseStarting();
+        this.recordError(entry, error);
+        return { status: "error", error };
+      }
+    }
+
     const temporaryPath = join(this.directory, `${clipId}.part.mp4`);
     await unlink(temporaryPath).catch(() => undefined);
 
@@ -160,6 +176,8 @@ export class EventClipRecorder {
         { stdio: ["pipe", "ignore", "pipe"] },
       );
     } catch (error) {
+      this.starting = null;
+      releaseStarting();
       this.recordError(entry, error);
       return { status: "error", error };
     }
@@ -174,6 +192,7 @@ export class EventClipRecorder {
       child,
       completion,
       entry,
+      entries: new Map([[clipId, entry]]),
       resolveCompletion,
       settled: false,
       stderr: "",
@@ -181,7 +200,10 @@ export class EventClipRecorder {
       timer: null,
     };
     this.active.set(clipId, recording);
+    this.currentRecording = recording;
     this.errors.delete(clipId);
+    this.starting = null;
+    releaseStarting();
     this.onStatus(this.withClipStatus(entry));
 
     child.stderr?.setEncoding?.("utf8");
@@ -189,7 +211,9 @@ export class EventClipRecorder {
       recording.stderr = `${recording.stderr}${chunk}`.slice(-2_000);
     });
     child.stdin.on("error", (error) => {
-      if (error?.code !== "EPIPE") this.recordError(entry, error);
+      if (error?.code !== "EPIPE") {
+        void this.finishRecording(recording, null, error);
+      }
     });
     child.once("error", (error) => {
       void this.finishRecording(recording, null, error);
@@ -198,22 +222,10 @@ export class EventClipRecorder {
       void this.finishRecording(recording, code);
     });
 
-    const eventAtMs = this.now().getTime();
-    const oldestFrame = eventAtMs - this.preRollMs;
-    for (const frame of this.frames) {
-      if (frame.capturedAtMs >= oldestFrame) {
-        // Pre-roll is already bounded, so allowing the stream to buffer here
-        // preserves the moments before the event instead of dropping them.
-        if (!recording.child.stdin.destroyed) {
-          recording.child.stdin.write(frame.buffer);
-        }
-      }
-    }
-
     recording.timer = setTimeout(() => {
       recording.accepting = false;
       if (!recording.child.stdin.destroyed) recording.child.stdin.end();
-    }, this.postRollMs);
+    }, this.durationMs);
 
     return completion;
   }
@@ -231,15 +243,33 @@ export class EventClipRecorder {
     clearTimeout(recording.timer);
     recording.accepting = false;
     this.active.delete(recording.entry.clipId);
+    if (this.currentRecording === recording) this.currentRecording = null;
 
     if (!error && code === 0) {
       try {
-        await rename(recording.temporaryPath, this.clipPath(recording.entry.clipId));
-        this.ready.add(recording.entry.clipId);
-        this.errors.delete(recording.entry.clipId);
+        const primaryClipId = recording.entry.clipId;
+        const primaryPath = this.clipPath(primaryClipId);
+        await rename(recording.temporaryPath, primaryPath);
+        this.ready.add(primaryClipId);
+        this.errors.delete(primaryClipId);
+        this.onStatus(this.withClipStatus(recording.entry));
+
+        for (const [coveredClipId, coveredEntry] of recording.entries) {
+          if (coveredClipId === primaryClipId) continue;
+          try {
+            const coveredPath = this.clipPath(coveredClipId);
+            await unlink(coveredPath).catch(() => undefined);
+            await link(primaryPath, coveredPath);
+            this.ready.add(coveredClipId);
+            this.errors.delete(coveredClipId);
+            this.onStatus(this.withClipStatus(coveredEntry));
+          } catch (linkError) {
+            this.recordError(coveredEntry, linkError);
+          }
+        }
+
         const result = { status: "ready" };
         recording.resolveCompletion(result);
-        this.onStatus(this.withClipStatus(recording.entry));
         return;
       } catch (renameError) {
         error = renameError;
@@ -252,14 +282,15 @@ export class EventClipRecorder {
         recording.stderr.trim() || `ffmpeg exited with code ${code ?? "unknown"}`,
       );
     await unlink(recording.temporaryPath).catch(() => undefined);
-    this.recordError(recording.entry, detail);
+    for (const coveredEntry of recording.entries.values()) {
+      this.recordError(coveredEntry, detail);
+    }
     recording.resolveCompletion({ status: "error", error: detail });
   }
 
   stop() {
     this.unsubscribe?.();
     this.unsubscribe = null;
-    this.frames = [];
 
     for (const recording of this.active.values()) {
       clearTimeout(recording.timer);

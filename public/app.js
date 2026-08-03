@@ -300,9 +300,9 @@ function renderDetectionLog() {
         clip.href = `/api/clips/${encodeURIComponent(entry.clipId)}.mp4`;
         clip.target = "_blank";
         clip.rel = "noopener";
-        clip.textContent = "Watch 10s clip →";
+        clip.textContent = "Watch clip →";
       } else if (entry.clipStatus === "recording") {
-        clip.textContent = "Recording 10s clip…";
+        clip.textContent = "Recording clip…";
       } else {
         clip.textContent = "Clip unavailable";
       }

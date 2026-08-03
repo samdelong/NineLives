@@ -187,7 +187,7 @@ export function createConfig(env = process.env) {
         env.DETECTION_CLIP_DIRECTORY || "data/clips",
       ),
       durationMs:
-        integerFromEnv(env.DETECTION_CLIP_DURATION_SECONDS, 10, {
+        integerFromEnv(env.DETECTION_CLIP_DURATION_SECONDS, 30, {
           min: 2,
           max: 60,
         }) * 1_000,

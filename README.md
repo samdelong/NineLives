@@ -91,7 +91,7 @@ you care about.
 - Self-hosted or compatible remote Roboflow inference
 - Exact daily inference windows with overnight scheduling
 - Persistent, multi-day JSONL detection history
-- Event-centered MP4 clips with five seconds before and after each transition
+- Thirty-second MP4 clips for entry and exit events
 - Live log updates using server-sent events
 - Per-cat entry and exit transitions without repeated-frame spam
 - Camera and inference health reporting
@@ -201,11 +201,11 @@ browser refreshes, device restarts, and multiple days.
 
 ### Watch event clips
 
-Every confirmed entry or exit starts a 10-second annotated MP4 recording. Nine
-Lives keeps a rolling five-second frame buffer, then records another five
-seconds after the event. This captures the actual movement even though exits
-use a one-second anti-flicker delay. Finished clips are linked from their
-detection-log entries and saved in `data/clips` by default.
+Every confirmed entry or exit starts a 30-second annotated MP4 recording. Only
+one recording runs at a time. If another event happens during that window, its
+detection-log entry links to the clip already being recorded instead of
+starting another FFmpeg process. Finished clips are saved in `data/clips` by
+default.
 
 ## Configuration
 
@@ -249,7 +249,7 @@ Arguments are passed directly to the camera process without a shell.
 | `DETECTION_LOG_COOLDOWN_MS` | `1000` | Continuous absence required before logging an exit |
 | `DETECTION_CLIPS_ENABLED` | `true` | Record a clip for each entry and exit |
 | `DETECTION_CLIP_DIRECTORY` | `data/clips` | Saved MP4 clips |
-| `DETECTION_CLIP_DURATION_SECONDS` | `10` | Total event-centered clip length |
+| `DETECTION_CLIP_DURATION_SECONDS` | `30` | Recording time after the first event |
 | `FFMPEG_COMMAND` | `ffmpeg` | FFmpeg executable used to encode MP4 clips |
 
 `CAMERA_MJPEG_URL` can point the worker at a different MJPEG source. By
@@ -297,7 +297,7 @@ npm test
 
 - [ ] Guided cat enrollment: hold up a cat to create its profile
 - [ ] Add, rename, and remove known cats
-- [x] Save event-centered clips around detections
+- [x] Save event clips around detections
 - [ ] Optional notifications and webhooks
 - [ ] Multi-camera support
 

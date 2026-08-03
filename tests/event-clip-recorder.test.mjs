@@ -11,6 +11,7 @@ import {
 import { InferenceStreamPublisher } from "../src/inference-publisher.mjs";
 
 const CLIP_ID = "11111111-1111-4111-8111-111111111111";
+const COVERED_CLIP_ID = "22222222-2222-4222-8222-222222222222";
 
 function fakeFfmpegSpawner(calls) {
   return (command, args) => {
@@ -45,11 +46,15 @@ test("validates clip IDs used in public paths", () => {
   assert.equal(isValidClipId("not-a-uuid"), false);
 });
 
-test("records pre-roll and post-roll annotated frames into an MP4", async () => {
+test("records annotated frames for the full post-trigger window", async () => {
   const directory = await mkdtemp(join(tmpdir(), "nine-lives-clips-"));
   const publisher = new InferenceStreamPublisher({ targetFps: 24 });
   const spawnCalls = [];
   const statuses = [];
+  let resolveStarted;
+  const started = new Promise((resolve) => {
+    resolveStarted = resolve;
+  });
 
   try {
     const recorder = new EventClipRecorder({
@@ -58,7 +63,10 @@ test("records pre-roll and post-roll annotated frames into an MP4", async () => 
       durationMs: 40,
       fps: 24,
       spawn: fakeFfmpegSpawner(spawnCalls),
-      onStatus: (entry) => statuses.push(entry.clipStatus),
+      onStatus: (entry) => {
+        statuses.push(entry.clipStatus);
+        if (entry.clipStatus === "recording") resolveStarted();
+      },
     });
     await recorder.start();
 
@@ -71,7 +79,7 @@ test("records pre-roll and post-roll annotated frames into an MP4", async () => 
       clipId: CLIP_ID,
       message: "Bobby entered.",
     });
-    await new Promise((resolve) => setImmediate(resolve));
+    await started;
     publisher.publishFrame(Buffer.from("after"), {
       contentType: "image/jpeg",
       frameId: "after",
@@ -83,10 +91,82 @@ test("records pre-roll and post-roll annotated frames into an MP4", async () => 
     assert.ok(spawnCalls[0].args.includes("libx264"));
     assert.equal(
       (await readFile(recorder.clipPath(CLIP_ID))).toString(),
-      "beforeafter",
+      "after",
     );
     assert.equal(recorder.getClipStatus(CLIP_ID), "ready");
     assert.deepEqual(statuses, ["recording", "ready"]);
+    recorder.stop();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("covers overlapping events with one recording process", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "nine-lives-covered-clips-"));
+  const publisher = new InferenceStreamPublisher({ targetFps: 24 });
+  const spawnCalls = [];
+  const statuses = [];
+  let resolveStarted;
+  const started = new Promise((resolve) => {
+    resolveStarted = resolve;
+  });
+
+  try {
+    const recorder = new EventClipRecorder({
+      publisher,
+      directory,
+      durationMs: 40,
+      fps: 24,
+      spawn: fakeFfmpegSpawner(spawnCalls),
+      onStatus: (entry) => {
+        statuses.push([entry.clipId, entry.clipStatus]);
+        if (
+          entry.clipId === CLIP_ID &&
+          entry.clipStatus === "recording"
+        ) {
+          resolveStarted();
+        }
+      },
+    });
+    await recorder.start();
+
+    const first = recorder.record({
+      id: CLIP_ID,
+      clipId: CLIP_ID,
+      message: "Bobby entered.",
+    });
+    const covered = recorder.record({
+      id: COVERED_CLIP_ID,
+      clipId: COVERED_CLIP_ID,
+      message: "Bobby left.",
+    });
+    await started;
+    publisher.publishFrame(Buffer.from("shared"), {
+      contentType: "image/jpeg",
+      frameId: "shared",
+    });
+
+    assert.deepEqual(await Promise.all([first, covered]), [
+      { status: "ready" },
+      { status: "ready" },
+    ]);
+    assert.equal(spawnCalls.length, 1);
+    assert.equal(
+      (await readFile(recorder.clipPath(CLIP_ID))).toString(),
+      "shared",
+    );
+    assert.equal(
+      (await readFile(recorder.clipPath(COVERED_CLIP_ID))).toString(),
+      "shared",
+    );
+    assert.equal(recorder.getClipStatus(CLIP_ID), "ready");
+    assert.equal(recorder.getClipStatus(COVERED_CLIP_ID), "ready");
+    assert.deepEqual(statuses, [
+      [CLIP_ID, "recording"],
+      [COVERED_CLIP_ID, "recording"],
+      [CLIP_ID, "ready"],
+      [COVERED_CLIP_ID, "ready"],
+    ]);
     recorder.stop();
   } finally {
     await rm(directory, { recursive: true, force: true });
