@@ -3,6 +3,7 @@
 **A self-hosted cat camera that watches feeding time for you.**
 
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/samdelong/NineLives/actions/workflows/ci.yml/badge.svg)](https://github.com/samdelong/NineLives/actions/workflows/ci.yml)
 ![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)
 ![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-camera-C51A4A?logo=raspberrypi&logoColor=white)
 
@@ -285,6 +286,10 @@ and browser paths used by the real camera. Run the checks with:
 npm run check
 npm test
 ```
+
+GitHub Actions runs the JavaScript checks and tests on Node.js 20, 22, and 24.
+It also installs and imports the inference bridge on every supported Python
+version from 3.10 through 3.12.
 
 ## HTTP API
 
