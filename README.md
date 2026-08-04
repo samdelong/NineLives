@@ -9,10 +9,15 @@
 
 ![Nine Lives detecting a cat](public/og.png)
 
+
+
 Nine Lives turns a Raspberry Pi camera into a real-time feeding-area monitor.
 Open the dashboard from any browser to see annotated video, choose exactly when
 inference should run, and review a detection history that survives refreshes
 and restarts.
+
+<img width="800" height="423" alt="kitty cat" src="https://github.com/user-attachments/assets/421d6fae-0659-4e06-8f9d-8a7e0da9ee53" />
+
 
 The camera stays responsive at 24 FPS while a scheduled, long-lived Roboflow
 WebRTC session performs inference on a server you control. That means useful
