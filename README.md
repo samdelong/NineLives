@@ -24,6 +24,9 @@ WebRTC session performs inference on a server you control. That means useful
 coverage around feeding time without keeping the inference workload running
 all day.
 
+<img width="358" height="290" alt="Screenshot 2026-08-05 at 12 23 07 PM" src="https://github.com/user-attachments/assets/5b17f7ea-b50a-44b9-92e8-1c800506056f" />
+
+
 [Explore the Roboflow Workflow][roboflow-workflow] ·
 [Get started](#quick-start) ·
 [View the HTTP API](#http-api)
