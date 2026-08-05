@@ -5,7 +5,6 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![CI](https://github.com/samdelong/NineLives/actions/workflows/ci.yml/badge.svg)](https://github.com/samdelong/NineLives/actions/workflows/ci.yml)
 ![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)
-![Raspberry Pi](https://img.shields.io/badge/Raspberry%20Pi-camera-C51A4A?logo=raspberrypi&logoColor=white)
 
 ![Nine Lives detecting a cat](public/og.png)
 
